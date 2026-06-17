@@ -22,6 +22,7 @@ import threading
 
 import config
 from boards import BOARDS, PROTOCOL_AURORA, board_for
+from selection import Selection
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -98,6 +99,111 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _build_session(sel, api_level, serial):
+    """Resolve a :class:`Selection` into ``(board, variant, session)``.
+
+    ``api_level``/``serial`` are Aurora-only knobs; they are dropped for a
+    MoonBoard selection (``create_session`` rejects them there), so a board
+    switch onto the MoonBoard never trips the option guard.
+    """
+    from protocols.session import create_session
+
+    board = board_for(sel.board_key)
+    variant = board.variant_for(sel.layout_key)
+    aurora = board.protocol == PROTOCOL_AURORA
+    session = create_session(
+        board, variant, sel.size_id,
+        api_level if aurora else None,
+        serial if aurora else None,
+    )
+    return board, variant, session
+
+
+def _run_headless(session) -> int:
+    """Single board, no GUI: wait for BLE writes until Ctrl+C or a fatal
+    peripheral error. Headless has no board bar — switch by restarting."""
+    from ble.peripheral import BLEPeripheral
+
+    renderer = session.create_renderer(headless=True)
+    stop_event = threading.Event()
+    state = {"code": 0}
+
+    def shutdown(fatal: bool = False) -> None:
+        if fatal:
+            state["code"] = 1
+            logger.error("BLE peripheral died — shutting down")
+        else:
+            logger.info("Shutting down...")
+        ble.stop()
+        stop_event.set()
+
+    ble = BLEPeripheral(
+        ble_name=session.ble_name, profile=session.gatt_profile,
+        on_data=session.feed,
+        on_connect=lambda: renderer.update_status("Verbunden"),
+        on_disconnect=lambda: renderer.update_status("Advertising..."),
+        on_fatal=lambda exc: shutdown(fatal=True),
+    )
+    signal.signal(signal.SIGINT, lambda *_: shutdown())
+    try:
+        ble.start()
+        logger.info("Headless mode — waiting for BLE writes (Ctrl+C to quit)")
+        stop_event.wait()
+    except Exception:
+        logger.exception("Fatal error")
+        state["code"] = 1
+    finally:
+        ble.stop()
+    return state["code"]
+
+
+def _run_gui_loop(sel, api_level, serial) -> int:
+    """GUI mode: run one board; when the board bar requests a switch, stop
+    the BLE peripheral and rebuild the session + window for the new board.
+
+    A board switch changes the BLE name, GATT profile and renderer, so an
+    in-place swap is not possible — this clean soft-restart is. The process
+    and the Tkinter session stay alive across switches.
+    """
+    import time
+
+    from ble.peripheral import BLEPeripheral
+
+    while True:
+        board, variant, session = _build_session(sel, api_level, serial)
+        logger.info("Board: %s — %s [%s protocol]", board.display_name,
+                    variant.display_name, board.protocol)
+        logger.info("BLE name: %s", session.ble_name)
+
+        renderer = session.create_renderer(headless=False, selection=sel)
+        # Bind the current renderer into each callback so a late BLE
+        # callback can never reach the next iteration's window.
+        ble = BLEPeripheral(
+            ble_name=session.ble_name, profile=session.gatt_profile,
+            on_data=session.feed,
+            on_connect=lambda r=renderer: r.update_status("Verbunden"),
+            on_disconnect=lambda r=renderer: r.update_status("Advertising..."),
+            on_fatal=lambda exc, r=renderer: r.request_quit(fatal=True),
+        )
+        signal.signal(signal.SIGINT, lambda *_, r=renderer: r.request_quit())
+
+        try:
+            ble.start()
+            renderer.run()  # blocks until a switch request or window close
+        finally:
+            ble.stop()
+
+        nxt = renderer.switch_request
+        fatal = renderer.fatal
+        renderer.close_window()
+        if fatal:
+            return 1
+        if nxt is None:
+            return 0
+        sel = nxt
+        time.sleep(0.4)  # let BlueZ release the adapter before re-advertising
+
+
 def main() -> int:
     args = _parse_args()
     if args.list:
@@ -105,28 +211,28 @@ def main() -> int:
         return 0
 
     headless = args.headless or config.headless_mode()
-    board = board_for(args.board)
-    variant = board.variant_for(args.layout)
 
-    from protocols.session import create_session
+    # Resolve + validate the initial selection BEFORE the BlueZ preflight so
+    # a bad --layout/--size/option combo exits 2 (a clear CLI error) rather
+    # than 1 (the no-Bluetooth fail-fast).
+    sel = Selection(args.board, args.layout, args.size)
     try:
-        session = create_session(board, variant, args.size,
-                                 args.api_level, args.serial)
+        board, variant, session = _build_session(sel, args.api_level, args.serial)
     except ValueError as exc:
         logger.error("%s", exc)
         return 2
+    # Normalise so the board bar shows the real current layout (not None).
+    sel = Selection(board.key, variant.key, args.size)
 
     logger.info("Board Simulator starting")
     logger.info("Board: %s — %s [%s protocol]", board.display_name,
                 variant.display_name, board.protocol)
-    logger.info("BLE name: %s", session.ble_name)
     logger.info("Mode: %s", "headless" if headless else "GUI")
 
-    # Fail fast on machines without BlueZ / a Bluetooth adapter instead
-    # of silently advertising into the void.
-    from ble.peripheral import BLEPeripheral, BlueZUnavailableError
+    # Fail fast on machines without BlueZ / a Bluetooth adapter instead of
+    # silently advertising into the void.
+    from ble.peripheral import BlueZUnavailableError, preflight_check
     try:
-        from ble.peripheral import preflight_check
         preflight_check()
     except BlueZUnavailableError as exc:
         logger.error("Bluetooth unavailable: %s", exc)
@@ -134,58 +240,12 @@ def main() -> int:
                      "--list and the test suite run without one.")
         return 1
 
-    renderer = session.create_renderer(headless)
-
-    stop_event = threading.Event()
-    exit_code = 0
-
-    def on_ble_connect() -> None:
-        renderer.update_status("Verbunden")  # type: ignore[attr-defined]
-
-    def on_ble_disconnect() -> None:
-        renderer.update_status("Advertising...")  # type: ignore[attr-defined]
-
-    ble = BLEPeripheral(
-        ble_name=session.ble_name,
-        profile=session.gatt_profile,
-        on_data=session.feed,
-        on_connect=on_ble_connect,
-        on_disconnect=on_ble_disconnect,
-        on_fatal=lambda exc: shutdown(fatal=True),
-    )
-
-    def shutdown(fatal: bool = False) -> None:
-        nonlocal exit_code
-        if fatal:
-            exit_code = 1
-            logger.error("BLE peripheral died — shutting down")
-        else:
-            logger.info("Shutting down...")
-        ble.stop()
-        stop_event.set()
-        if not headless:
-            try:
-                renderer._root.after(0, renderer._root.destroy)  # type: ignore[attr-defined]
-            except Exception:
-                pass
-
-    signal.signal(signal.SIGINT, lambda *_: shutdown())
-
     try:
-        ble.start()
         if headless:
-            logger.info("Headless mode — waiting for BLE writes (Ctrl+C to quit)")
-            stop_event.wait()
-        else:
-            renderer.set_close_callback(shutdown)  # type: ignore[attr-defined]
-            renderer.run()  # type: ignore[attr-defined]  # blocks until window closed
-    except Exception:
-        logger.exception("Fatal error")
-        exit_code = 1
+            return _run_headless(session)
+        return _run_gui_loop(sel, args.api_level, args.serial)
     finally:
-        ble.stop()
         logger.info("Goodbye")
-    return exit_code
 
 
 if __name__ == "__main__":

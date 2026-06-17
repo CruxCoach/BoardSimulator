@@ -32,6 +32,7 @@ BoardSimulator/
 ├── board_geometry.py     # LED->hole coords, edges, roles (Aurora SQLite)
 ├── board_state.py        # Shared base + AuroraBoardState/MoonBoardState
 ├── role_colors.py        # decoded RGB -> board-local role (per API level)
+├── selection.py          # Tk-free (board,layout,size) model for the switcher
 ├── protocols/
 │   ├── session.py        # GattProfiles + AuroraSession/MoonSession factory
 │   ├── aurora_decoder.py # Aurora packet decoder (API level 2 + 3)
@@ -42,6 +43,7 @@ BoardSimulator/
 │   ├── gatt.py           # GattProfile spec -> D-Bus GATT objects
 │   └── advertising.py    # Extended-Advertising HCI helpers
 ├── render/               # aurora_gui/aurora_headless/moon_gui/moon_headless
+│                         # + switching.py (BoardBar + SwitchableWindow mixin)
 ├── data/<brand>.sqlite3  # Trimmed official board DBs (geometry tables only)
 ├── assets/<brand>/       # Board images (aurora) / photos + JSON maps (moon)
 ├── tools/                # build_data.py (5 aurora brands), trim_kilter_db.py
@@ -126,8 +128,23 @@ NUS-only GATT (no discovery service), advertised name is the bare
 "MoonBoard". ASCII frames `l#S0,P1,E197#`; serpentine strip arithmetic
 is generalised over grid_rows (18 standard, 12 Mini 2020 — Mini wiring
 is the BoardSesh-extrapolated assumption, real-hardware capture still
-pending). The GUI has a live variant picker; the switch swaps the
-decoder via `MoonSession.switch_variant` and clears the state.
+pending). `MoonSession.switch_variant` still does an in-place decoder
+swap + state clear (kept and unit-tested), but the GUI no longer drives it
+directly — runtime switching goes through the unified board bar (below).
+
+### Live board switching (GUI) — THE rebuild loop
+
+Both GUIs show a `render/switching.BoardBar` (Board / Layout / Size
+dropdowns); `selection.py` holds the Tk-free cascade rules (board→default
+layout+size, layout→default size, MoonBoard carries no size). A pick can
+change the BLE name, GATT profile AND renderer type, so there is no
+in-place swap: `SwitchableWindow.request_switch` records the target and
+ends the Tk main loop, then `main._run_gui_loop` stops the BLE peripheral,
+rebuilds session + window + a fresh `BLEPeripheral` for the new
+`Selection`, and re-enters. Window-close sets no switch request → the loop
+exits. `--headless` has no bar (single board per process). The cascade
+logic is unit-tested (`tests/test_selection.py`); the live BLE/Tk restart
+is manual-only (no adapter/display in CI).
 
 ### LED map semantics (aurora)
 

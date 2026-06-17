@@ -82,12 +82,13 @@ class Session:
         """Forward raw bytes from a GATT write to the protocol decoder."""
         raise NotImplementedError
 
-    def create_renderer(self, headless: bool):
+    def create_renderer(self, headless: bool, selection=None):
         """Build the GUI or headless renderer and wire it to the state.
 
         Must be called from the main thread (Tkinter requirement).
         The returned renderer offers update_holds/update_status and, for
-        GUIs, set_close_callback/run.
+        GUIs, run() plus the SwitchableWindow interface (the board bar is
+        built from ``selection``; headless renderers ignore it).
         """
         raise NotImplementedError
 
@@ -122,7 +123,7 @@ class AuroraSession(Session):
     def feed(self, data: bytes) -> None:
         self._decoder.feed(data)
 
-    def create_renderer(self, headless: bool):
+    def create_renderer(self, headless: bool, selection=None):
         if headless:
             from render.aurora_headless import HeadlessRenderer
             renderer = HeadlessRenderer(self.geometry, self.resolver)
@@ -130,7 +131,7 @@ class AuroraSession(Session):
             # Imported lazily so headless boxes without Tk still run.
             from render.aurora_gui import BoardGUI
             renderer = BoardGUI(self.geometry, self.ble_name, self.resolver,
-                                title=self.window_title)
+                                title=self.window_title, selection=selection)
         self.state.register_callback(renderer.update_holds)
         return renderer
 
@@ -171,16 +172,14 @@ class MoonSession(Session):
             on_message=self.state.update, grid_rows=new_variant.grid_rows)
         self.state.clear()
 
-    def create_renderer(self, headless: bool):
+    def create_renderer(self, headless: bool, selection=None):
         if headless:
             from render.moon_headless import MoonHeadlessRenderer
             renderer = MoonHeadlessRenderer(self.variant.grid_rows)
         else:
             # Imported lazily so headless boxes without Tk still run.
             from render.moon_gui import MoonBoardGUI
-            renderer = MoonBoardGUI(
-                self.board, self.variant,
-                on_variant_change=self.switch_variant)
+            renderer = MoonBoardGUI(self.board, self.variant, selection=selection)
         self.state.register_callback(renderer.update_holds)
         return renderer
 

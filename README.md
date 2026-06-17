@@ -124,8 +124,15 @@ Nach dem Start:
    Rollen-Farben (Kilter z. B. middle=Cyan/finish=Magenta, So iLL
    middle=Magenta/finish=Weiß/foot=Cyan)
 
-In der MoonBoard-GUI lässt sich die Variante zur Laufzeit per Dropdown
-wechseln (Decoder und Board-Zustand werden dabei sauber neu aufgebaut).
+### Board zur Laufzeit wechseln
+
+Jede GUI hat oben eine **Board-Leiste** mit Dropdowns für **Board**,
+**Layout** und (bei Aurora-Boards) **Size**. Eine Auswahl wechselt das
+simulierte Board live — der Prozess läuft weiter, Fenster und BLE-Peripheral
+werden für das neue Board sauber neu aufgebaut (das deckt auch einen Wechsel
+zwischen den Protokollfamilien Aurora ↔ MoonBoard ab, da sich BLE-Name und
+GATT-Profil ändern). Im `--headless`-Modus gibt es keine Leiste; dort wählt
+man das Board beim Start.
 
 ### Test-Client ausführen
 

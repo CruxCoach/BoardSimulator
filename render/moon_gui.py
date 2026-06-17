@@ -17,11 +17,11 @@ import json
 import logging
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk
-from typing import Callable
 
 from board_state import MoonHoldMap as HoldMap
 from boards import Board, MoonVariant
+from render.switching import BoardBar, SwitchableWindow
+from selection import Selection
 from protocols.moonboard import (
     COLUMN_LETTERS,
     NUM_COLUMNS,
@@ -85,7 +85,7 @@ def _load_image_assets(board: Board, variant: MoonVariant):
     return image, layout["holds"]
 
 
-class MoonBoardGUI:
+class MoonBoardGUI(SwitchableWindow):
     """Tkinter window that renders the simulated MoonBoard.
 
     When the variant has bundled assets, lit holds are drawn on top of
@@ -97,14 +97,13 @@ class MoonBoardGUI:
         self,
         board: Board,
         variant: MoonVariant,
-        on_variant_change: Callable[[MoonVariant], None] | None = None,
+        selection: Selection | None = None,
     ) -> None:
         self._board = board
         self._variant = variant
         self._grid_rows = variant.grid_rows
         self._holds: HoldMap = {}
         self._status_text = "Advertising..."
-        self._on_variant_change = on_variant_change
 
         # Try image mode first; fall back to procedural if anything is missing.
         self._image, holds_json = _load_image_assets(board, variant)
@@ -124,9 +123,8 @@ class MoonBoardGUI:
             status_bar, textvariable=self._status_var, bg="#111111", fg="#00cc66",
             font=STATUS_FONT, anchor=tk.W, padx=10, pady=5,
         ).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        # Variant chip on the status bar — also used as the label for
-        # the picker right below it so the user knows which board the
-        # phone is currently talking to.
+        # Variant chip on the status bar — shows which board the phone is
+        # currently talking to.
         self._title_var = tk.StringVar(value=variant.display_name)
         tk.Label(
             status_bar, textvariable=self._title_var,
@@ -134,8 +132,10 @@ class MoonBoardGUI:
             anchor=tk.E, padx=10, pady=5,
         ).pack(side=tk.RIGHT)
 
-        # Variant picker — switches the active board live, no restart.
-        self._build_variant_bar()
+        # Live board switcher — rebuilds the window + BLE on a pick.
+        if selection is not None:
+            BoardBar(self._root, selection, self.request_switch).pack(
+                fill=tk.X, side=tk.TOP, pady=(6, 0))
 
         self._canvas = tk.Canvas(
             self._root, width=self._canvas_w, height=self._canvas_h,
@@ -156,7 +156,6 @@ class MoonBoardGUI:
         self._build_legend()
 
         self._root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._close_callback = None
 
     def _compute_canvas_size(self) -> tuple[int, int]:
         if self._use_image_mode:
@@ -165,28 +164,6 @@ class MoonBoardGUI:
             NUM_COLUMNS * CELL_SIZE + 2 * MARGIN,
             self._grid_rows * CELL_SIZE + 2 * MARGIN,
         )
-
-    def _build_variant_bar(self) -> None:
-        """Combobox to switch the active variant at runtime."""
-        bar = tk.Frame(self._root, bg=BACKGROUND_COLOR)
-        bar.pack(fill=tk.X, side=tk.TOP, padx=10, pady=(6, 0))
-        tk.Label(
-            bar, text="Board:", bg=BACKGROUND_COLOR, fg=LABEL_COLOR,
-            font=LABEL_FONT,
-        ).pack(side=tk.LEFT)
-        self._variant_var = tk.StringVar(value=self._variant.display_name)
-        # Map display name -> variant for the reverse lookup on selection.
-        self._display_to_variant = {
-            v.display_name: v for v in self._board.variants
-        }
-        combo = ttk.Combobox(
-            bar, textvariable=self._variant_var,
-            values=list(self._display_to_variant.keys()),
-            state="readonly", width=28,
-        )
-        combo.pack(side=tk.LEFT, padx=8)
-        combo.bind("<<ComboboxSelected>>", self._on_variant_selected)
-        self._variant_combo = combo
 
     # ── Image-mode rendering ──────────────────────────────────────
 
@@ -276,9 +253,6 @@ class MoonBoardGUI:
                 font=LABEL_FONT,
             ).pack(side=tk.LEFT)
 
-    def set_close_callback(self, callback) -> None:
-        self._close_callback = callback
-
     def update_holds(self, holds: HoldMap) -> None:
         self._root.after(0, self._apply_holds, holds)
 
@@ -318,54 +292,9 @@ class MoonBoardGUI:
                 )
         logger.debug("GUI updated: %d holds active", len(holds))
 
-    def _on_variant_selected(self, _event=None) -> None:
-        """Combobox handler — resolves the picked display name back to a
-        MoonVariant and switches the board live."""
-        variant = self._display_to_variant.get(self._variant_var.get())
-        if variant is None or variant.key == self._variant.key:
-            return
-        self.switch_to(variant)
-
-    def switch_to(self, new_variant: MoonVariant) -> None:
-        """Re-render the canvas for the new variant without recreating the
-        window. Decoder + board-state ownership lives in the session; the
-        on_variant_change callback (set at construction) carries the
-        switch out so the BLE pipeline updates atomically.
-        """
-        if new_variant.key == self._variant.key:
-            return
-        logger.info(
-            "GUI variant switch: %s -> %s",
-            self._variant.display_name, new_variant.display_name,
-        )
-
-        self._variant = new_variant
-        self._grid_rows = new_variant.grid_rows
-        self._title_var.set(new_variant.display_name)
-        self._root.title(f"MoonBoard Simulator — {new_variant.display_name}")
-        self._variant_var.set(new_variant.display_name)
-
-        # Re-resolve assets + canvas dims, then wipe and redraw.
-        self._image, holds_json = _load_image_assets(self._board, new_variant)
-        self._use_image_mode = self._image is not None and holds_json is not None
-        self._canvas_w, self._canvas_h = self._compute_canvas_size()
-        self._canvas.config(width=self._canvas_w, height=self._canvas_h)
-        self._canvas.delete("all")
-        self._cells.clear()
-        self._photo = None
-        if self._use_image_mode:
-            self._draw_image_mode(holds_json)
-        else:
-            self._draw_procedural_grid()
-
-        # Notify the session so the decoder rebuilds with the new
-        # grid_rows and board_state is cleared (stale holds from the old
-        # grid may not exist on the new one).
-        if self._on_variant_change is not None:
-            self._on_variant_change(new_variant)
-
     def _on_close(self) -> None:
+        """Window closed by the user → end the main loop with no switch
+        request, so main.py stops the BLE peripheral and exits."""
         logger.info("GUI window closed")
-        if self._close_callback:
-            self._close_callback()
-        self._root.destroy()
+        self.switch_request = None
+        self._root.quit()

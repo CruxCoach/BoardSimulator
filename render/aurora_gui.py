@@ -8,12 +8,13 @@ style. Falls back to plain hold dots when no image asset exists.
 import logging
 import os
 import tkinter as tk
-from typing import Any
 
 from PIL import Image as PILImage, ImageTk
 
 from board_geometry import BoardGeometry
+from render.switching import BoardBar, SwitchableWindow
 from role_colors import RoleColorResolver
+from selection import Selection
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +46,13 @@ def board_image_path(geometry: BoardGeometry) -> str | None:
     return None
 
 
-class BoardGUI:
+class BoardGUI(SwitchableWindow):
     """Tkinter window showing the board with image and colored ring overlays."""
 
     def __init__(self, geometry: BoardGeometry, ble_name: str,
                  resolver: RoleColorResolver | None = None,
-                 title: str | None = None) -> None:
+                 title: str | None = None,
+                 selection: Selection | None = None) -> None:
         self._geometry = geometry
         self._resolver = resolver
         self._holds: dict[int, tuple[int, int, int]] = {}
@@ -83,6 +85,11 @@ class BoardGUI:
             font=TITLE_FONT, anchor=tk.E, padx=10, pady=5,
         ).pack(side=tk.RIGHT)
 
+        # Live board switcher — rebuilds the window + BLE on a pick.
+        if selection is not None:
+            BoardBar(self._root, selection, self.request_switch).pack(
+                fill=tk.X, side=tk.TOP)
+
         # Canvas
         self._canvas = tk.Canvas(
             self._root, width=self._canvas_w, height=self._canvas_h,
@@ -106,7 +113,6 @@ class BoardGUI:
             self._rings[pos] = ring_id
 
         self._root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._close_callback: Any = None
 
     def _load_board_image(self) -> None:
         """Load the board background image, or draw fallback hold dots."""
@@ -130,10 +136,6 @@ class BoardGUI:
                 px - DOT_RADIUS, py - DOT_RADIUS, px + DOT_RADIUS, py + DOT_RADIUS,
                 fill=DOT_COLOR, outline="",
             )
-
-    def set_close_callback(self, callback: Any) -> None:
-        """Set a callback to be invoked when the window is closed."""
-        self._close_callback = callback
 
     def update_holds(self, holds: dict[int, tuple[int, int, int]]) -> None:
         """Schedule a hold update on the GUI thread."""
@@ -178,8 +180,8 @@ class BoardGUI:
         logger.debug("GUI updated: %d holds active", len(holds))
 
     def _on_close(self) -> None:
-        """Handle window close."""
+        """Window closed by the user → end the main loop with no switch
+        request, so main.py stops the BLE peripheral and exits."""
         logger.info("GUI window closed")
-        if self._close_callback:
-            self._close_callback()
-        self._root.destroy()
+        self.switch_request = None
+        self._root.quit()
