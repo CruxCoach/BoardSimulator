@@ -156,9 +156,13 @@ class BLEPeripheral:
         logger.info("BLE peripheral thread started")
 
     def stop(self) -> None:
+        # Cooperative shutdown: _serve()'s poll loop checks self._running and
+        # returns on its own, so run_until_complete() finishes normally and
+        # the bus/loop close cleanly. A forced loop.stop() here interrupted
+        # run_until_complete mid-await and raised "Event loop stopped before
+        # Future completed" — harmless, but logged as a scary traceback on
+        # every board switch.
         self._running = False
-        if self._loop:
-            self._loop.call_soon_threadsafe(self._loop.stop)
         if self._thread:
             self._thread.join(timeout=5.0)
         logger.info("BLE peripheral stopped")
