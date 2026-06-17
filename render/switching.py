@@ -1,12 +1,11 @@
-"""Live board switcher widgets shared by both GUIs.
+"""Live board switcher widget shared by both GUI panels.
 
 :class:`BoardBar` is the dropdown row (Board / Layout / Size) that lets the
-user re-target the simulator at runtime. :class:`SwitchableWindow` is the
-small mixin that lets a Tk window end its main loop with either a *switch
-request* or a plain *quit* — main.py's rebuild loop reads ``switch_request``
-after ``run()`` returns and rebuilds the session + BLE peripheral for the
-new board (a board change alters the BLE name, GATT shape and renderer, so
-an in-place swap is not possible; a clean soft-restart is).
+user re-target the simulator at runtime. A pick calls the controller's
+``on_switch`` (``main._run_gui``), which tears down the current panel + BLE
+peripheral and rebuilds them for the new board — a board change alters the
+BLE name, GATT shape and renderer, so an in-place swap is not possible; a
+clean rebuild under one persistent Tk root is.
 
 Pure UI glue — the selection arithmetic lives in ``selection.py``.
 """
@@ -108,38 +107,3 @@ class BoardBar:
         if size_id is not None and size_id != sel.effective_size_id(self._current):
             self._on_switch(sel.change_size(
                 self._current.board_key, self._current.layout_key, size_id))
-
-
-class SwitchableWindow:
-    """Mixin for a Tk window whose ``run()`` returns to switch or to quit.
-
-    The host must set ``self._root`` (a ``tk.Tk``). After ``run()`` returns,
-    main.py inspects :attr:`switch_request` (a :class:`Selection` to rebuild
-    for, or ``None`` to quit) and :attr:`fatal` (BLE died → exit non-zero).
-    """
-
-    switch_request: Selection | None = None
-    fatal: bool = False
-
-    def request_switch(self, new: Selection) -> None:
-        """BoardBar callback (GUI thread): record target, end the main loop."""
-        logger.info("Board switch requested → %s / %s%s",
-                    new.board_key, new.layout_key,
-                    f" / size {new.size_id}" if new.size_id is not None else "")
-        self.switch_request = new
-        self._root.quit()  # type: ignore[attr-defined]
-
-    def request_quit(self, fatal: bool = False) -> None:
-        """Thread-safe quit (e.g. from the BLE thread on a fatal error)."""
-        if fatal:
-            self.fatal = True
-        try:
-            self._root.after(0, self._root.quit)  # type: ignore[attr-defined]
-        except Exception:
-            pass
-
-    def close_window(self) -> None:
-        try:
-            self._root.destroy()  # type: ignore[attr-defined]
-        except Exception:
-            pass

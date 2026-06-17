@@ -1,18 +1,24 @@
-"""Tkinter GUI for visualizing the simulated Aurora-family board.
+"""Tkinter panel for visualizing the simulated Aurora-family board.
 
 Renders the bundled board background image for the active (size, layout)
 with colored ring overlays for lit LEDs, matching the CruxCoach visual
 style. Falls back to plain hold dots when no image asset exists.
+
+This is a *panel*: it builds its widgets into a parent container owned by
+the controller (main._run_gui), which keeps a single persistent Tk root
+across board switches. Creating/destroying a fresh tk.Tk() per switch
+crashed Tcl ("async handler deleted by the wrong thread").
 """
 
 import logging
 import os
 import tkinter as tk
+from typing import Callable
 
 from PIL import Image as PILImage, ImageTk
 
 from board_geometry import BoardGeometry
-from render.switching import BoardBar, SwitchableWindow
+from render.switching import BoardBar
 from role_colors import RoleColorResolver
 from selection import Selection
 
@@ -46,13 +52,19 @@ def board_image_path(geometry: BoardGeometry) -> str | None:
     return None
 
 
-class BoardGUI(SwitchableWindow):
-    """Tkinter window showing the board with image and colored ring overlays."""
+class BoardGUI:
+    """Panel showing the board image with colored ring overlays.
 
-    def __init__(self, geometry: BoardGeometry, ble_name: str,
+    Builds into ``parent`` (a Tk container); the controller owns the root
+    and its main loop. ``on_switch`` (with ``selection``) wires the board
+    bar — omit both for a bar-less panel.
+    """
+
+    def __init__(self, parent: tk.Misc, geometry: BoardGeometry, ble_name: str,
                  resolver: RoleColorResolver | None = None,
-                 title: str | None = None,
-                 selection: Selection | None = None) -> None:
+                 selection: Selection | None = None,
+                 on_switch: Callable[[Selection], None] | None = None) -> None:
+        self._parent = parent
         self._geometry = geometry
         self._resolver = resolver
         self._holds: dict[int, tuple[int, int, int]] = {}
@@ -62,19 +74,9 @@ class BoardGUI(SwitchableWindow):
         self._canvas_h = CANVAS_HEIGHT
         self._canvas_w = int(CANVAS_HEIGHT * aspect)
 
-        # Build window
-        self._root = tk.Tk()
-        self._root.title(
-            title
-            or f"{geometry.board.display_name} Simulator — "
-               f"{geometry.variant.display_name} / {geometry.size.name}"
-        )
-        self._root.configure(bg=BACKGROUND_COLOR)
-        self._root.resizable(False, False)
-
         # Status bar
         self._status_var = tk.StringVar(value="Advertising...")
-        status_bar = tk.Frame(self._root, bg="#111111")
+        status_bar = tk.Frame(parent, bg="#111111")
         status_bar.pack(fill=tk.X, side=tk.TOP)
         tk.Label(
             status_bar, textvariable=self._status_var, bg="#111111", fg="#00cc66",
@@ -85,14 +87,13 @@ class BoardGUI(SwitchableWindow):
             font=TITLE_FONT, anchor=tk.E, padx=10, pady=5,
         ).pack(side=tk.RIGHT)
 
-        # Live board switcher — rebuilds the window + BLE on a pick.
-        if selection is not None:
-            BoardBar(self._root, selection, self.request_switch).pack(
-                fill=tk.X, side=tk.TOP)
+        # Live board switcher — the controller rebuilds this panel + BLE on a pick.
+        if selection is not None and on_switch is not None:
+            BoardBar(parent, selection, on_switch).pack(fill=tk.X, side=tk.TOP)
 
         # Canvas
         self._canvas = tk.Canvas(
-            self._root, width=self._canvas_w, height=self._canvas_h,
+            parent, width=self._canvas_w, height=self._canvas_h,
             bg=BACKGROUND_COLOR, highlightthickness=0,
         )
         self._canvas.pack()
@@ -112,7 +113,7 @@ class BoardGUI(SwitchableWindow):
             )
             self._rings[pos] = ring_id
 
-        self._root.protocol("WM_DELETE_WINDOW", self._on_close)
+        logger.info("Aurora panel built (%dx%d)", self._canvas_w, self._canvas_h)
 
     def _load_board_image(self) -> None:
         """Load the board background image, or draw fallback hold dots."""
@@ -139,49 +140,40 @@ class BoardGUI(SwitchableWindow):
 
     def update_holds(self, holds: dict[int, tuple[int, int, int]]) -> None:
         """Schedule a hold update on the GUI thread."""
-        self._root.after(0, self._apply_holds, holds)
+        self._parent.after(0, self._apply_holds, holds)
 
     def update_status(self, text: str) -> None:
         """Update the status bar text (thread-safe via after())."""
-        self._root.after(0, self._status_var.set, text)
-
-    def run(self) -> None:
-        """Start the Tkinter main loop (blocks until window is closed)."""
-        logger.info("GUI started (%dx%d)", self._canvas_w, self._canvas_h)
-        self._root.mainloop()
+        self._parent.after(0, self._status_var.set, text)
 
     def _apply_holds(self, holds: dict[int, tuple[int, int, int]]) -> None:
         """Redraw hold rings on the canvas. Runs in the GUI thread."""
         self._holds = holds
+        try:
+            # Hide all rings first
+            for ring_id in self._rings.values():
+                self._canvas.itemconfig(ring_id, state=tk.HIDDEN)
 
-        # Hide all rings first
-        for ring_id in self._rings.values():
-            self._canvas.itemconfig(ring_id, state=tk.HIDDEN)
-
-        # Show rings for active holds. Display uses the role's screen
-        # colour when the wire colour resolves to a board role (matching
-        # the official app's rendering), the raw wire RGB otherwise.
-        unknown_positions = 0
-        for position, (r, g, b) in holds.items():
-            ring_id = self._rings.get(position)
-            if ring_id is None:
-                unknown_positions += 1
-                continue
-            color = f"#{r:02x}{g:02x}{b:02x}"
-            if self._resolver is not None:
-                role = self._resolver.resolve(r, g, b)
-                if role is not None:
-                    color = f"#{role.screen_color}"
-            self._canvas.itemconfig(ring_id, outline=color, state=tk.NORMAL)
+            # Show rings for active holds. Display uses the role's screen
+            # colour when the wire colour resolves to a board role (matching
+            # the official app's rendering), the raw wire RGB otherwise.
+            unknown_positions = 0
+            for position, (r, g, b) in holds.items():
+                ring_id = self._rings.get(position)
+                if ring_id is None:
+                    unknown_positions += 1
+                    continue
+                color = f"#{r:02x}{g:02x}{b:02x}"
+                if self._resolver is not None:
+                    role = self._resolver.resolve(r, g, b)
+                    if role is not None:
+                        color = f"#{role.screen_color}"
+                self._canvas.itemconfig(ring_id, outline=color, state=tk.NORMAL)
+        except tk.TclError:
+            # Panel was torn down mid-update (board switch) — drop this frame.
+            return
 
         if unknown_positions:
             logger.warning("%d holds at LED positions unknown to this board size",
                            unknown_positions)
         logger.debug("GUI updated: %d holds active", len(holds))
-
-    def _on_close(self) -> None:
-        """Window closed by the user → end the main loop with no switch
-        request, so main.py stops the BLE peripheral and exits."""
-        logger.info("GUI window closed")
-        self.switch_request = None
-        self._root.quit()

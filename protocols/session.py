@@ -82,13 +82,17 @@ class Session:
         """Forward raw bytes from a GATT write to the protocol decoder."""
         raise NotImplementedError
 
-    def create_renderer(self, headless: bool, selection=None):
-        """Build the GUI or headless renderer and wire it to the state.
+    def create_renderer(self, headless: bool = True):
+        """Build the headless renderer (stdout grid) and wire it to the state."""
+        raise NotImplementedError
 
-        Must be called from the main thread (Tkinter requirement).
-        The returned renderer offers update_holds/update_status and, for
-        GUIs, run() plus the SwitchableWindow interface (the board bar is
-        built from ``selection``; headless renderers ignore it).
+    def create_panel(self, parent, selection, on_switch):
+        """Build the Tk GUI panel into ``parent`` and wire it to the state.
+
+        Must be called from the main thread (Tkinter requirement). The
+        controller (main._run_gui) owns a single persistent root + main loop;
+        on a board-bar pick it tears the panel down and rebuilds it for the
+        new selection. Returns an object with update_holds/update_status.
         """
         raise NotImplementedError
 
@@ -123,17 +127,19 @@ class AuroraSession(Session):
     def feed(self, data: bytes) -> None:
         self._decoder.feed(data)
 
-    def create_renderer(self, headless: bool, selection=None):
-        if headless:
-            from render.aurora_headless import HeadlessRenderer
-            renderer = HeadlessRenderer(self.geometry, self.resolver)
-        else:
-            # Imported lazily so headless boxes without Tk still run.
-            from render.aurora_gui import BoardGUI
-            renderer = BoardGUI(self.geometry, self.ble_name, self.resolver,
-                                title=self.window_title, selection=selection)
+    def create_renderer(self, headless: bool = True):
+        from render.aurora_headless import HeadlessRenderer
+        renderer = HeadlessRenderer(self.geometry, self.resolver)
         self.state.register_callback(renderer.update_holds)
         return renderer
+
+    def create_panel(self, parent, selection, on_switch):
+        # Imported lazily so headless boxes without Tk still run.
+        from render.aurora_gui import BoardGUI
+        panel = BoardGUI(parent, self.geometry, self.ble_name, self.resolver,
+                         selection=selection, on_switch=on_switch)
+        self.state.register_callback(panel.update_holds)
+        return panel
 
 
 class MoonSession(Session):
@@ -172,16 +178,19 @@ class MoonSession(Session):
             on_message=self.state.update, grid_rows=new_variant.grid_rows)
         self.state.clear()
 
-    def create_renderer(self, headless: bool, selection=None):
-        if headless:
-            from render.moon_headless import MoonHeadlessRenderer
-            renderer = MoonHeadlessRenderer(self.variant.grid_rows)
-        else:
-            # Imported lazily so headless boxes without Tk still run.
-            from render.moon_gui import MoonBoardGUI
-            renderer = MoonBoardGUI(self.board, self.variant, selection=selection)
+    def create_renderer(self, headless: bool = True):
+        from render.moon_headless import MoonHeadlessRenderer
+        renderer = MoonHeadlessRenderer(self.variant.grid_rows)
         self.state.register_callback(renderer.update_holds)
         return renderer
+
+    def create_panel(self, parent, selection, on_switch):
+        # Imported lazily so headless boxes without Tk still run.
+        from render.moon_gui import MoonBoardGUI
+        panel = MoonBoardGUI(parent, self.board, self.variant,
+                             selection=selection, on_switch=on_switch)
+        self.state.register_callback(panel.update_holds)
+        return panel
 
 
 def create_session(board: Board, variant, size_id: int | None,

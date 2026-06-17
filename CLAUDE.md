@@ -43,7 +43,7 @@ BoardSimulator/
 │   ├── gatt.py           # GattProfile spec -> D-Bus GATT objects
 │   └── advertising.py    # Extended-Advertising HCI helpers
 ├── render/               # aurora_gui/aurora_headless/moon_gui/moon_headless
-│                         # + switching.py (BoardBar + SwitchableWindow mixin)
+│                         # + switching.py (BoardBar dropdown widget)
 ├── data/<brand>.sqlite3  # Trimmed official board DBs (geometry tables only)
 ├── assets/<brand>/       # Board images (aurora) / photos + JSON maps (moon)
 ├── tools/                # build_data.py (5 aurora brands), trim_kilter_db.py
@@ -132,19 +132,31 @@ pending). `MoonSession.switch_variant` still does an in-place decoder
 swap + state clear (kept and unit-tested), but the GUI no longer drives it
 directly — runtime switching goes through the unified board bar (below).
 
-### Live board switching (GUI) — THE rebuild loop
+### Live board switching (GUI) — ONE persistent root
 
-Both GUIs show a `render/switching.BoardBar` (Board / Layout / Size
+Both GUI panels show a `render/switching.BoardBar` (Board / Layout / Size
 dropdowns); `selection.py` holds the Tk-free cascade rules (board→default
 layout+size, layout→default size, MoonBoard carries no size). A pick can
 change the BLE name, GATT profile AND renderer type, so there is no
-in-place swap: `SwitchableWindow.request_switch` records the target and
-ends the Tk main loop, then `main._run_gui_loop` stops the BLE peripheral,
-rebuilds session + window + a fresh `BLEPeripheral` for the new
-`Selection`, and re-enters. Window-close sets no switch request → the loop
-exits. `--headless` has no bar (single board per process). The cascade
-logic is unit-tested (`tests/test_selection.py`); the live BLE/Tk restart
-is manual-only (no adapter/display in CI).
+in-place swap.
+
+`main._run_gui` is the controller: it creates a **single `tk.Tk()` root**
+for the whole session and runs ONE `mainloop()`. The GUIs are *panels*
+(`session.create_panel(parent, …)`) built into that root, not windows.
+A board-bar pick calls the controller's `switch()`, which `teardown()`s
+(stop the BLE peripheral — joins its thread so no more `root.after()`
+updates are queued — then destroys the root's child widgets) and
+`build()`s the new session + panel + `BLEPeripheral`. The root and its
+interpreter survive every switch.
+
+This replaced an earlier per-switch `tk.Tk()` recreate that crashed Tcl
+(`async handler deleted by the wrong thread`): the BLE thread queues canvas
+updates via `root.after()`, and destroying the root underneath them frees
+Tcl handlers off-thread. `_apply_holds` also guards `tk.TclError` for any
+update racing a teardown. `--headless` has no bar (single board per
+process; `create_renderer` builds the stdout renderer). The cascade logic
+is unit-tested (`tests/test_selection.py`); the live BLE/Tk path is
+manual-only (no adapter/display in CI).
 
 ### LED map semantics (aurora)
 

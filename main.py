@@ -157,51 +157,79 @@ def _run_headless(session) -> int:
     return state["code"]
 
 
-def _run_gui_loop(sel, api_level, serial) -> int:
-    """GUI mode: run one board; when the board bar requests a switch, stop
-    the BLE peripheral and rebuild the session + window for the new board.
+def _run_gui(selection, api_level, serial) -> int:
+    """GUI mode: ONE persistent Tk root; a board-bar pick tears down the
+    current panel + BLE peripheral and rebuilds them for the new board.
 
-    A board switch changes the BLE name, GATT profile and renderer, so an
-    in-place swap is not possible — this clean soft-restart is. The process
-    and the Tkinter session stay alive across switches.
+    A switch changes the BLE name, GATT profile and renderer, so it is a
+    clean rebuild — but the root and its main loop persist. Recreating
+    tk.Tk() per switch crashed Tcl ("async handler deleted by the wrong
+    thread"): the BLE thread queues canvas updates via root.after(), and
+    tearing the root down underneath them frees Tcl handlers off-thread.
+    Swapping only the root's children keeps the one interpreter alive.
     """
-    import time
+    import tkinter as tk
 
     from ble.peripheral import BLEPeripheral
 
-    while True:
-        board, variant, session = _build_session(sel, api_level, serial)
-        logger.info("Board: %s — %s [%s protocol]", board.display_name,
-                    variant.display_name, board.protocol)
-        logger.info("BLE name: %s", session.ble_name)
+    root = tk.Tk()
+    root.configure(bg="#1a1a1a")
+    root.resizable(False, False)
+    state: dict = {"ble": None, "fatal": False}
 
-        renderer = session.create_renderer(headless=False, selection=sel)
-        # Bind the current renderer into each callback so a late BLE
-        # callback can never reach the next iteration's window.
+    def teardown() -> None:
+        # Stop BLE first (joins its thread) so no more root.after() updates
+        # are queued, THEN destroy the panel widgets.
+        if state["ble"] is not None:
+            state["ble"].stop()
+            state["ble"] = None
+        for child in root.winfo_children():
+            child.destroy()
+
+    def close(fatal: bool = False) -> None:
+        if fatal:
+            state["fatal"] = True
+            logger.error("BLE peripheral died — shutting down")
+        else:
+            logger.info("Shutting down...")
+        teardown()
+        root.quit()
+
+    def switch(new_sel) -> None:
+        logger.info("Switching board → %s / %s", new_sel.board_key, new_sel.layout_key)
+        teardown()
+        build(new_sel)
+
+    def build(sel) -> None:
+        board, variant, session = _build_session(sel, api_level, serial)
+        root.title(session.window_title)
+        panel = session.create_panel(root, sel, switch)
         ble = BLEPeripheral(
             ble_name=session.ble_name, profile=session.gatt_profile,
             on_data=session.feed,
-            on_connect=lambda r=renderer: r.update_status("Verbunden"),
-            on_disconnect=lambda r=renderer: r.update_status("Advertising..."),
-            on_fatal=lambda exc, r=renderer: r.request_quit(fatal=True),
+            on_connect=lambda p=panel: p.update_status("Verbunden"),
+            on_disconnect=lambda p=panel: p.update_status("Advertising..."),
+            on_fatal=lambda exc: root.after(0, close, True),
         )
-        signal.signal(signal.SIGINT, lambda *_, r=renderer: r.request_quit())
+        state["ble"] = ble
+        logger.info("Board: %s — %s [%s protocol]", board.display_name,
+                    variant.display_name, board.protocol)
+        logger.info("BLE name: %s", session.ble_name)
+        ble.start()
 
+    root.protocol("WM_DELETE_WINDOW", close)
+    signal.signal(signal.SIGINT, lambda *_: root.after(0, close))
+    build(selection)
+    try:
+        root.mainloop()
+    finally:
+        if state["ble"] is not None:
+            state["ble"].stop()
         try:
-            ble.start()
-            renderer.run()  # blocks until a switch request or window close
-        finally:
-            ble.stop()
-
-        nxt = renderer.switch_request
-        fatal = renderer.fatal
-        renderer.close_window()
-        if fatal:
-            return 1
-        if nxt is None:
-            return 0
-        sel = nxt
-        time.sleep(0.4)  # let BlueZ release the adapter before re-advertising
+            root.destroy()
+        except tk.TclError:
+            pass
+    return 1 if state["fatal"] else 0
 
 
 def main() -> int:
@@ -243,7 +271,7 @@ def main() -> int:
     try:
         if headless:
             return _run_headless(session)
-        return _run_gui_loop(sel, args.api_level, args.serial)
+        return _run_gui(sel, args.api_level, args.serial)
     finally:
         logger.info("Goodbye")
 

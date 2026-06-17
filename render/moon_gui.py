@@ -17,10 +17,11 @@ import json
 import logging
 import tkinter as tk
 from pathlib import Path
+from typing import Callable
 
 from board_state import MoonHoldMap as HoldMap
 from boards import Board, MoonVariant
-from render.switching import BoardBar, SwitchableWindow
+from render.switching import BoardBar
 from selection import Selection
 from protocols.moonboard import (
     COLUMN_LETTERS,
@@ -85,20 +86,24 @@ def _load_image_assets(board: Board, variant: MoonVariant):
     return image, layout["holds"]
 
 
-class MoonBoardGUI(SwitchableWindow):
-    """Tkinter window that renders the simulated MoonBoard.
+class MoonBoardGUI:
+    """Panel that renders the simulated MoonBoard.
 
     When the variant has bundled assets, lit holds are drawn on top of
     the real board photo at the coord-map positions; otherwise a
-    procedural 11×N grid is drawn.
+    procedural 11×N grid is drawn. Builds into ``parent``; the controller
+    (main._run_gui) owns the single persistent Tk root and its main loop.
     """
 
     def __init__(
         self,
+        parent: tk.Misc,
         board: Board,
         variant: MoonVariant,
         selection: Selection | None = None,
+        on_switch: Callable[[Selection], None] | None = None,
     ) -> None:
+        self._parent = parent
         self._board = board
         self._variant = variant
         self._grid_rows = variant.grid_rows
@@ -111,13 +116,8 @@ class MoonBoardGUI(SwitchableWindow):
 
         self._canvas_w, self._canvas_h = self._compute_canvas_size()
 
-        self._root = tk.Tk()
-        self._root.title(f"MoonBoard Simulator — {variant.display_name}")
-        self._root.configure(bg=BACKGROUND_COLOR)
-        self._root.resizable(False, False)
-
         self._status_var = tk.StringVar(value=self._status_text)
-        status_bar = tk.Frame(self._root, bg="#111111")
+        status_bar = tk.Frame(parent, bg="#111111")
         status_bar.pack(fill=tk.X, side=tk.TOP)
         tk.Label(
             status_bar, textvariable=self._status_var, bg="#111111", fg="#00cc66",
@@ -132,13 +132,13 @@ class MoonBoardGUI(SwitchableWindow):
             anchor=tk.E, padx=10, pady=5,
         ).pack(side=tk.RIGHT)
 
-        # Live board switcher — rebuilds the window + BLE on a pick.
-        if selection is not None:
-            BoardBar(self._root, selection, self.request_switch).pack(
+        # Live board switcher — the controller rebuilds this panel + BLE on a pick.
+        if selection is not None and on_switch is not None:
+            BoardBar(parent, selection, on_switch).pack(
                 fill=tk.X, side=tk.TOP, pady=(6, 0))
 
         self._canvas = tk.Canvas(
-            self._root, width=self._canvas_w, height=self._canvas_h,
+            parent, width=self._canvas_w, height=self._canvas_h,
             bg=BACKGROUND_COLOR, highlightthickness=0,
         )
         self._canvas.pack()
@@ -154,8 +154,9 @@ class MoonBoardGUI(SwitchableWindow):
             self._draw_procedural_grid()
 
         self._build_legend()
-
-        self._root.protocol("WM_DELETE_WINDOW", self._on_close)
+        logger.info("MoonBoard panel built (%dx%d, %s mode)",
+                    self._canvas_w, self._canvas_h,
+                    "image" if self._use_image_mode else "procedural")
 
     def _compute_canvas_size(self) -> tuple[int, int]:
         if self._use_image_mode:
@@ -241,7 +242,7 @@ class MoonBoardGUI(SwitchableWindow):
     # ── Legend / lifecycle / hold updates ────────────────────────
 
     def _build_legend(self) -> None:
-        legend = tk.Frame(self._root, bg=BACKGROUND_COLOR)
+        legend = tk.Frame(self._parent, bg=BACKGROUND_COLOR)
         legend.pack(fill=tk.X, side=tk.BOTTOM, pady=4)
         for role_code, name in ROLE_NAMES.items():
             color = ROLE_COLORS.get(role_code, (255, 255, 255))
@@ -254,47 +255,38 @@ class MoonBoardGUI(SwitchableWindow):
             ).pack(side=tk.LEFT)
 
     def update_holds(self, holds: HoldMap) -> None:
-        self._root.after(0, self._apply_holds, holds)
+        self._parent.after(0, self._apply_holds, holds)
 
     def update_status(self, text: str) -> None:
-        self._root.after(0, self._status_var.set, text)
-
-    def run(self) -> None:
-        logger.info("GUI started (%dx%d, %s mode)",
-                    self._canvas_w, self._canvas_h,
-                    "image" if self._use_image_mode else "procedural")
-        self._root.mainloop()
+        self._parent.after(0, self._status_var.set, text)
 
     def _apply_holds(self, holds: HoldMap) -> None:
         self._holds = holds
-        # Reset every cell.
-        for cell_id in self._cells.values():
-            if self._use_image_mode:
-                self._canvas.itemconfig(cell_id, outline="", fill="", width=0)
-            else:
-                self._canvas.itemconfig(
-                    cell_id, fill=EMPTY_HOLD_COLOR, outline=GRID_COLOR, width=1,
-                )
-        # Fill lit cells.
-        for (column, row), (_role_code, r, g, b) in holds.items():
-            cell_id = self._cells.get((column, row))
-            if cell_id is None:
-                logger.warning("Lit hold off-grid: column=%d row=%d", column, row)
-                continue
-            color = _rgb_to_hex((r, g, b))
-            if self._use_image_mode:
-                self._canvas.itemconfig(
-                    cell_id, outline=color, fill="", width=RING_WIDTH_IMAGE,
-                )
-            else:
-                self._canvas.itemconfig(
-                    cell_id, fill=color, outline="#ffffff", width=RING_WIDTH,
-                )
+        try:
+            # Reset every cell.
+            for cell_id in self._cells.values():
+                if self._use_image_mode:
+                    self._canvas.itemconfig(cell_id, outline="", fill="", width=0)
+                else:
+                    self._canvas.itemconfig(
+                        cell_id, fill=EMPTY_HOLD_COLOR, outline=GRID_COLOR, width=1,
+                    )
+            # Fill lit cells.
+            for (column, row), (_role_code, r, g, b) in holds.items():
+                cell_id = self._cells.get((column, row))
+                if cell_id is None:
+                    logger.warning("Lit hold off-grid: column=%d row=%d", column, row)
+                    continue
+                color = _rgb_to_hex((r, g, b))
+                if self._use_image_mode:
+                    self._canvas.itemconfig(
+                        cell_id, outline=color, fill="", width=RING_WIDTH_IMAGE,
+                    )
+                else:
+                    self._canvas.itemconfig(
+                        cell_id, fill=color, outline="#ffffff", width=RING_WIDTH,
+                    )
+        except tk.TclError:
+            # Panel torn down mid-update (board switch) — drop this frame.
+            return
         logger.debug("GUI updated: %d holds active", len(holds))
-
-    def _on_close(self) -> None:
-        """Window closed by the user → end the main loop with no switch
-        request, so main.py stops the BLE peripheral and exits."""
-        logger.info("GUI window closed")
-        self.switch_request = None
-        self._root.quit()
