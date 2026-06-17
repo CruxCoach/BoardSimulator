@@ -172,8 +172,12 @@ holds, skipped for finish holds).
   (source: KilterSimulator's data/db.sqlite3), restricted to products
   1+7 / layouts 1+8. Kilter's older schema lacks `placements.set_id`;
   the trim derives it via `holds.set_id`.
-- `assets/moonboard/`: photos + coordinate maps from MoonSimulator
-  (FEAT-027 vector pipeline).
+- `assets/moonboard/`: photos + coordinate maps. MUST stay byte-identical
+  to CruxCoach's bundled `board_images/moonboard_*.{webp,json}` — the app
+  renders the overlay against those exact coord maps, so an out-of-sync map
+  here misplaces the simulator's hold circles even though decoding is
+  correct. (A stale MoonSimulator-era map for 2017/2019/mini caused exactly
+  that; re-synced from the CruxCoach 0.2.0 assets.)
 - Test fixture values (LED counts, placement->LED samples, role tables,
   edges) were verified against those DBs and CruxCoach 0.2.0's
   BoardConstants. Do NOT commit absolute paths to any workspace.
