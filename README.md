@@ -39,6 +39,24 @@ Board-Foto) oder im Headless-Modus als ASCII-Raster auf stdout.
 
 ## Installation
 
+### Schnellstart (Linux Mint / Ubuntu / Debian)
+
+1:1 zum Kopieren — klonen und das mitgelieferte Setup-Skript ausführen.
+Es installiert die apt-Pakete, legt das venv an, installiert die
+Abhängigkeiten und macht einen `--list`-Smoke-Test:
+
+```bash
+git clone https://codeberg.org/CruxCoach/BoardSimulator.git
+cd BoardSimulator
+./setup.sh
+```
+
+`setup.sh` fragt einmal nach dem sudo-Passwort (für die apt-Pakete
+`git bluez bluetooth python3-venv python3-tk`). Danach noch BlueZ
+aktivieren (siehe unten), dann ist alles startklar.
+
+### Manuell (Alternative)
+
 ```bash
 cd BoardSimulator
 python3 -m venv venv

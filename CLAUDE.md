@@ -13,7 +13,7 @@ Two protocol families behind one session abstraction:
 
 - **aurora** — Kilter, Tension, Grasshopper, Decoy, So iLL, Touchstone.
   Binary packets, placement/LED model, SQLite geometry.
-- **moonboard** — MoonBoard (4 variants). NUS-only GATT, ASCII frames,
+- **moonboard** — MoonBoard (5 variants). NUS-only GATT, ASCII frames,
   photo/coordinate-map rendering.
 
 This repo SUPERSEDES the three sibling simulators (`KilterSimulator`,
@@ -25,6 +25,7 @@ are replaced by `--list` / `board_geometry.py`.
 
 ```
 BoardSimulator/
+├── setup.sh              # apt deps + venv + requirements (Debian/Ubuntu/Mint)
 ├── main.py               # CLI + preflight + BLE + renderer wiring
 ├── config.py             # Both families' protocol constants, name builders
 ├── boards.py             # Registry: 7 boards, AuroraVariant/MoonVariant
@@ -50,6 +51,9 @@ BoardSimulator/
 ## Build / Run Commands
 
 ```bash
+# Quick setup (Debian/Ubuntu/Mint): apt deps + venv + requirements + smoke test
+./setup.sh
+# …or manually:
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 
@@ -163,6 +167,8 @@ holds, skipped for finish holds).
 - Single responsibility per module; max ~500 lines per file; thread
   safety via `threading.Lock`.
 - Type hints throughout; Python 3.10+.
-- Conventional commits; never push (local-only repo).
+- Conventional commits; published at
+  codeberg.org/CruxCoach/BoardSimulator (SSH remote `origin`, branch
+  `main`).
 - Unit tests must run without root/adapter; real-device BLE verification
   is manual and must not be claimed as tested.
