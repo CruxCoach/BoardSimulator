@@ -112,7 +112,8 @@ class TestMoonVariants:
         board = board_for("moonboard")
         rows = {v.key: v.grid_rows for v in board.variants}
         assert rows == {"2016": 18, "masters-2017": 18,
-                        "masters-2019": 18, "mini-2020": 12}
+                        "masters-2019": 18, "2024": 18,
+                        "mini-2020": 12}
 
 
 class TestScannerCompatibility:

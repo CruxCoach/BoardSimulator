@@ -87,7 +87,7 @@ python main.py --list
 | Option | Default | Beschreibung |
 |--------|---------|-------------|
 | `--board` | `kilter` | `kilter` `tension` `grasshopper` `decoy` `soill` `touchstone` `moonboard` |
-| `--layout` | erstes Layout | z. B. Kilter: `original` `homewall`; Tension: `tb1` `tb2` `tb2-spray`; MoonBoard: `2016` `masters-2017` `masters-2019` `mini-2020` |
+| `--layout` | erstes Layout | z. B. Kilter: `original` `homewall`; Tension: `tb1` `tb2` `tb2-spray`; MoonBoard: `2016` `masters-2017` `masters-2019` `2024` `mini-2020` |
 | `--size` | Layout-Default | Aurora `product_size_id` (siehe `--list`) — nur Aurora-Boards |
 | `--api-level` | `3` | Aurora-Protokoll-Version (`2` oder `3`), Suffix `@N` im BLE-Namen — nur Aurora-Boards |
 | `--serial` | `0001` | Seriennummer, Suffix `#serial` im BLE-Namen — nur Aurora-Boards |

@@ -220,6 +220,10 @@ BOARDS: dict[str, Board] = {
                         "moonboard_2017"),
             MoonVariant("masters-2019", "MoonBoard Masters 2019", 18,
                         "moonboard_2019"),
+            # 2024 198-hold set (layout 3): same 11x18 grid as 2016/17/19,
+            # so the standard serpentine arithmetic + coord-map apply
+            # unchanged. Mirrors CruxCoach's MoonBoardVariant.MOONBOARD_2024.
+            MoonVariant("2024", "MoonBoard 2024", 18, "moonboard_2024"),
             # Mini physically has 12 rows (vs. 18). The serpentine
             # multiplier is 12; BoardSesh's RE notes flag this as the
             # natural extrapolation of the standard protocol — dynamic
