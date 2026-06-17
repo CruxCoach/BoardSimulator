@@ -313,24 +313,58 @@ class BLEPeripheral:
         logger.info("D-Bus signal monitoring active (connect/disconnect)")
 
         # -- Keep running ----------------------------------------------
-        poll_ticks = 0
-        while self._running:
-            await asyncio.sleep(0.5)
-            poll_ticks += 1
+        try:
+            poll_ticks = 0
+            while self._running:
+                await asyncio.sleep(0.5)
+                poll_ticks += 1
 
-            # Every 2s: check for disconnects that D-Bus missed
-            if poll_ticks >= 4:
-                poll_ticks = 0
-                if self._gatt_active and not self._connected:
-                    has_conn = await self._check_hci_connections()
-                    if not has_conn:
-                        self._gatt_active = False
-                        logger.info("Fallback: disconnect detected via HCI poll "
-                                    "(D-Bus missed this device)")
-                        if self._on_disconnect:
-                            self._on_disconnect()
-                        asyncio.ensure_future(self._restart_advertising(
-                            adapter_props, uuid, board_name))
+                # Every 2s: check for disconnects that D-Bus missed
+                if poll_ticks >= 4:
+                    poll_ticks = 0
+                    if self._gatt_active and not self._connected:
+                        has_conn = await self._check_hci_connections()
+                        if not has_conn:
+                            self._gatt_active = False
+                            logger.info("Fallback: disconnect detected via HCI poll "
+                                        "(D-Bus missed this device)")
+                            if self._on_disconnect:
+                                self._on_disconnect()
+                            asyncio.ensure_future(self._restart_advertising(
+                                adapter_props, uuid, board_name))
+        finally:
+            # Explicitly tear the GATT app + advertising down on this loop so a
+            # board switch leaves NO stale application registered with BlueZ.
+            # (Relying on the dropped D-Bus socket alone left the old app live:
+            # BlueZ then served two UART services, and the phone's writes went
+            # to the previous board's RX characteristic — climbs silently lost.)
+            await self._unregister(gatt_mgr, app, adapter_props)
+
+    async def _unregister(self, gatt_mgr, app, adapter_props) -> None:
+        """Best-effort GATT/advertising teardown, all on the serve loop."""
+        try:
+            await gatt_mgr.call_unregister_application(app.path)  # type: ignore
+            logger.info("GATT application unregistered")
+        except Exception as exc:
+            logger.debug("unregister_application failed: %s", exc)
+        try:
+            await adapter_props.call_set(
+                "org.bluez.Adapter1", "Discoverable", Variant("b", False))
+        except Exception as exc:
+            logger.debug("clearing Discoverable failed: %s", exc)
+        try:
+            self._bus.unexport(app.path)
+            for svc in app.services:
+                self._bus.unexport(svc.path)
+                for char in svc.characteristics:
+                    self._bus.unexport(char.path)
+        except Exception as exc:
+            logger.debug("unexport failed: %s", exc)
+        try:
+            self._bus.disconnect()
+            logger.info("D-Bus connection closed")
+        except Exception as exc:
+            logger.debug("bus disconnect failed: %s", exc)
 
     async def _restart_advertising(self, adapter_props, uuid: str, name: str) -> None:
         """Restart advertising after a disconnect so new clients can connect."""
