@@ -1,41 +1,41 @@
 #!/usr/bin/env bash
-# BoardSimulator — Setup für Debian/Ubuntu/Linux Mint.
-# Installiert System-Pakete, legt ein venv an und installiert die Python-Deps.
-# BLE-Peripheral-Betrieb braucht danach noch BlueZ-Experimental + root (s. u.).
+# BoardSimulator — Setup for Debian/Ubuntu/Linux Mint.
+# Installs system packages, creates a venv and installs the Python deps.
+# BLE peripheral operation additionally needs BlueZ Experimental + root (see below).
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-echo "==> System-Pakete (per sudo apt)…"
+echo "==> System packages (via sudo apt)…"
 if command -v apt-get >/dev/null 2>&1; then
   sudo apt-get update
   sudo apt-get install -y git bluez bluetooth python3-venv python3-tk
 else
-  echo "!! Kein apt gefunden — bitte git, bluez, bluetooth, python3-venv," >&2
-  echo "   python3-tk manuell installieren." >&2
+  echo "!! No apt found — please install git, bluez, bluetooth, python3-venv," >&2
+  echo "   python3-tk manually." >&2
 fi
 
-echo "==> Python-venv + Abhängigkeiten…"
+echo "==> Python venv + dependencies…"
 python3 -m venv venv
 venv/bin/pip install --upgrade pip
 venv/bin/pip install -r requirements.txt
 
-echo "==> Smoke-Test (kein BLE/Root nötig)…"
-venv/bin/python main.py --list >/dev/null && echo "    OK: 'main.py --list' läuft."
+echo "==> Smoke test (no BLE/root needed)…"
+venv/bin/python main.py --list >/dev/null && echo "    OK: 'main.py --list' runs."
 
 cat <<'EOF'
 
-Fertig. Nächste Schritte:
+Done. Next steps:
 
-1) BlueZ für BLE-Peripheral aktivieren — in /etc/bluetooth/main.conf unter
-   [General] setzen:
+1) Enable BlueZ for BLE peripheral mode — in /etc/bluetooth/main.conf under
+   [General] set:
        Experimental = true
-   danach:  sudo systemctl restart bluetooth
+   then:  sudo systemctl restart bluetooth
 
-2) Simulator starten (BLE braucht root; venv-Python explizit aufrufen):
+2) Start the simulator (BLE needs root; call the venv Python explicitly):
        sudo venv/bin/python main.py --board kilter
        sudo venv/bin/python main.py --board moonboard            # 2016 (default)
 
-3) Ohne GUI:        sudo venv/bin/python main.py --board soill --headless
-   Alle Optionen:   venv/bin/python main.py --list
+3) Without GUI:     sudo venv/bin/python main.py --board soill --headless
+   All options:     venv/bin/python main.py --list
 EOF

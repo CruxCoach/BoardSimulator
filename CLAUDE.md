@@ -196,7 +196,7 @@ holds, skipped for finish holds).
 
 ## Conventions
 
-- Code + comments English; README German (sibling-project style).
+- Code + comments English; README English.
 - Single responsibility per module; max ~500 lines per file; thread
   safety via `threading.Lock`.
 - Type hints throughout; Python 3.10+.

@@ -1,49 +1,49 @@
-# BoardSimulator — Konsolidierter Software-BLE-Simulator für alle CruxCoach-Boards
+# BoardSimulator — Consolidated software BLE simulator for all CruxCoach boards
 
-Reine Software-Simulation **aller sieben interaktiven Boards** aus
-CruxCoach 0.2.0 auf Linux via Bluetooth Low Energy (BLE), in einer
-Codebasis und per CLI auswählbar:
+Pure-software simulation of **all seven interactive boards** from
+CruxCoach 0.2.0 on Linux via Bluetooth Low Energy (BLE), in a single
+codebase and selectable per CLI:
 
-| Board | Protokoll | Layouts | Rollen-IDs |
-|-------|-----------|---------|------------|
+| Board | Protocol | Layouts | Role IDs |
+|-------|----------|---------|----------|
 | **Kilter** | Aurora | Original, Homewall | 12–15 / 42–45 |
 | **Tension** | Aurora | TB1, TB2 (Mirror), TB2 (Spray) | TB1: 1–4, TB2: 5–8 |
 | **Grasshopper** | Aurora | Grasshopper 2020 | 1–4 |
 | **Decoy** | Aurora | Dungeon Trainer, Dots | 1–4 |
 | **So iLL** | Aurora | Summer 2024 | 1–4 |
 | **Touchstone** | Aurora | Winter 2020 | 1–4 |
-| **MoonBoard** | NUS/ASCII | 2016, Masters 2017, Masters 2019, Mini 2020 | Token-basiert |
+| **MoonBoard** | NUS/ASCII | 2016, Masters 2017, Masters 2019, Mini 2020 | Token-based |
 
-Der PC fungiert als BLE-Peripheral über den lokalen Bluetooth-Adapter
-(BlueZ) und akzeptiert Verbindungen von der jeweiligen offiziellen App
-oder von CruxCoach. Gesendete Kletter-Frames werden dekodiert und live
-visualisiert — wahlweise in einer Tkinter-GUI (Board-Bild bzw.
-Board-Foto) oder im Headless-Modus als ASCII-Raster auf stdout.
+The PC acts as a BLE peripheral via the local Bluetooth adapter (BlueZ)
+and accepts connections from the respective official app or from
+CruxCoach. Climb frames that are sent are decoded and visualized live —
+either in a Tkinter GUI (board image or board photo) or in headless mode
+as an ASCII grid on stdout.
 
-> **Dieses Repo löst die drei Einzel-Simulatoren ab:**
-> `KilterSimulator`, `AuroraSimulator` und `MoonSimulator` sind hierin
-> aufgegangen. Ein Simulator-Prozess simuliert weiterhin genau **ein**
-> Board. Kilters `get_board_details.py`/`led_position_parser.py` sind
-> durch `--list` bzw. `board_geometry.py` ersetzt.
+> **This repo supersedes the three individual simulators:**
+> `KilterSimulator`, `AuroraSimulator` and `MoonSimulator` have been
+> merged into it. A simulator process still simulates exactly **one**
+> board. Kilter's `get_board_details.py`/`led_position_parser.py` are
+> replaced by `--list` and `board_geometry.py` respectively.
 
-## Voraussetzungen
+## Requirements
 
 - **Python** 3.10+
-- **Linux** mit BlueZ
-- **Bluetooth-Adapter** mit BLE-Unterstützung (nur für Live-BLE;
-  `--list` und die Tests laufen ohne)
-- **System-Pakete:**
+- **Linux** with BlueZ
+- **Bluetooth adapter** with BLE support (only for live BLE;
+  `--list` and the tests run without one)
+- **System packages:**
   ```bash
   sudo apt install bluez bluetooth python3-tk
   ```
 
 ## Installation
 
-### Schnellstart (Linux Mint / Ubuntu / Debian)
+### Quick start (Linux Mint / Ubuntu / Debian)
 
-1:1 zum Kopieren — klonen und das mitgelieferte Setup-Skript ausführen.
-Es installiert die apt-Pakete, legt das venv an, installiert die
-Abhängigkeiten und macht einen `--list`-Smoke-Test:
+Copy-paste ready — clone and run the bundled setup script. It installs
+the apt packages, creates the venv, installs the dependencies and runs a
+`--list` smoke test:
 
 ```bash
 git clone https://codeberg.org/CruxCoach/BoardSimulator.git
@@ -51,11 +51,11 @@ cd BoardSimulator
 ./setup.sh
 ```
 
-`setup.sh` fragt einmal nach dem sudo-Passwort (für die apt-Pakete
-`git bluez bluetooth python3-venv python3-tk`). Danach noch BlueZ
-aktivieren (siehe unten), dann ist alles startklar.
+`setup.sh` asks once for the sudo password (for the apt packages
+`git bluez bluetooth python3-venv python3-tk`). After that, enable BlueZ
+(see below) and everything is ready to go.
 
-### Manuell (Alternative)
+### Manual (alternative)
 
 ```bash
 cd BoardSimulator
@@ -64,9 +64,9 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### BlueZ konfigurieren
+### Configure BlueZ
 
-Der BLE-Peripheral-Modus erfordert den experimentellen Modus von BlueZ
+BLE peripheral mode requires BlueZ's experimental mode
 (`/etc/bluetooth/main.conf`):
 
 ```ini
@@ -74,16 +74,16 @@ Der BLE-Peripheral-Modus erfordert den experimentellen Modus von BlueZ
 Experimental = true
 ```
 
-Danach: `sudo systemctl restart bluetooth`
+Then: `sudo systemctl restart bluetooth`
 
-## Nutzung
+## Usage
 
-### Simulator starten
+### Starting the simulator
 
-Der BLE-Peripheral-Modus benötigt Root-Rechte und einen Bluetooth-Adapter:
+BLE peripheral mode requires root privileges and a Bluetooth adapter:
 
 ```bash
-# Kilter Board Original, 12x12 mit Kickboard, GUI
+# Kilter Board Original, 12x12 with kickboard, GUI
 sudo venv/bin/python main.py --board kilter
 
 # Kilter Homewall 10x10
@@ -95,142 +95,139 @@ sudo venv/bin/python main.py --board tension --layout tb2
 # MoonBoard Mini 2020
 sudo venv/bin/python main.py --board moonboard --layout mini-2020
 
-# So iLL im Headless-Modus
+# So iLL in headless mode
 sudo venv/bin/python main.py --board soill --headless
 
-# Alle Boards/Layouts/Sizes anzeigen (kein BLE, kein Root nötig)
+# List all boards/layouts/sizes (no BLE, no root needed)
 python main.py --list
 ```
 
-| Option | Default | Beschreibung |
+| Option | Default | Description |
 |--------|---------|-------------|
 | `--board` | `kilter` | `kilter` `tension` `grasshopper` `decoy` `soill` `touchstone` `moonboard` |
-| `--layout` | erstes Layout | z. B. Kilter: `original` `homewall`; Tension: `tb1` `tb2` `tb2-spray`; MoonBoard: `2016` `masters-2017` `masters-2019` `2024` `mini-2020` |
-| `--size` | Layout-Default | Aurora `product_size_id` (siehe `--list`) — nur Aurora-Boards |
-| `--api-level` | `3` | Aurora-Protokoll-Version (`2` oder `3`), Suffix `@N` im BLE-Namen — nur Aurora-Boards |
-| `--serial` | `0001` | Seriennummer, Suffix `#serial` im BLE-Namen — nur Aurora-Boards |
-| `--headless` | aus | ASCII-Raster auf stdout statt GUI (auch: `BOARDSIM_HEADLESS=1`) |
+| `--layout` | first layout | e.g. Kilter: `original` `homewall`; Tension: `tb1` `tb2` `tb2-spray`; MoonBoard: `2016` `masters-2017` `masters-2019` `2024` `mini-2020` |
+| `--size` | layout default | Aurora `product_size_id` (see `--list`) — Aurora boards only |
+| `--api-level` | `3` | Aurora protocol version (`2` or `3`), suffix `@N` in the BLE name — Aurora boards only |
+| `--serial` | `0001` | Serial number, suffix `#serial` in the BLE name — Aurora boards only |
+| `--headless` | off | ASCII grid on stdout instead of GUI (also: `BOARDSIM_HEADLESS=1`) |
 
-Aurora-spezifische Optionen auf dem MoonBoard brechen mit einer klaren
-Fehlermeldung ab — ebenso ein Start ohne BlueZ/Bluetooth-Adapter
-(**Fail-fast** statt stummem Hängen).
+Aurora-specific options on the MoonBoard abort with a clear error
+message — as does a start without a BlueZ/Bluetooth adapter
+(**fail-fast** instead of silently hanging).
 
-Nach dem Start:
-1. Der BLE-Peripheral advertised — Aurora-Boards als
-   `<Boardname>#<serial>@<apiLevel>` (z. B. `Kilter Board#0001@3`),
-   das MoonBoard als bloßes `MoonBoard`
-2. Die offizielle App oder CruxCoach kann sich verbinden
-3. Gesendete Climbs werden live visualisiert — mit den **board-eigenen**
-   Rollen-Farben (Kilter z. B. middle=Cyan/finish=Magenta, So iLL
-   middle=Magenta/finish=Weiß/foot=Cyan)
+After starting:
+1. The BLE peripheral advertises — Aurora boards as
+   `<BoardName>#<serial>@<apiLevel>` (e.g. `Kilter Board#0001@3`),
+   the MoonBoard as the bare `MoonBoard`
+2. The official app or CruxCoach can connect
+3. Climbs that are sent are visualized live — with the **board's own**
+   role colors (Kilter e.g. middle=cyan/finish=magenta, So iLL
+   middle=magenta/finish=white/foot=cyan)
 
-### Board zur Laufzeit wechseln
+### Switching boards at runtime
 
-Jede GUI hat oben eine **Board-Leiste** mit Dropdowns für **Board**,
-**Layout** und (bei Aurora-Boards) **Size**. Eine Auswahl wechselt das
-simulierte Board live — der Prozess läuft weiter, Fenster und BLE-Peripheral
-werden für das neue Board sauber neu aufgebaut (das deckt auch einen Wechsel
-zwischen den Protokollfamilien Aurora ↔ MoonBoard ab, da sich BLE-Name und
-GATT-Profil ändern). Im `--headless`-Modus gibt es keine Leiste; dort wählt
-man das Board beim Start.
+Each GUI has a **board bar** at the top with dropdowns for **Board**,
+**Layout** and (for Aurora boards) **Size**. A selection switches the
+simulated board live — the process keeps running, and the window and BLE
+peripheral are cleanly rebuilt for the new board (this also covers a
+switch between the Aurora ↔ MoonBoard protocol families, since the BLE
+name and GATT profile change). In `--headless` mode there is no bar;
+there you choose the board at startup.
 
-### Test-Client ausführen
+### Running the test client
 
-In einem separaten Terminal (während `main.py` läuft):
+In a separate terminal (while `main.py` is running):
 
 ```bash
 source venv/bin/activate
-pip install bleak   # nur für den Mock-Client nötig
-python tests/test_ble_mock_client.py kilter      # oder tension, moonboard, ...
+pip install bleak   # only needed for the mock client
+python tests/test_ble_mock_client.py kilter      # or tension, moonboard, ...
 ```
 
-Der Test-Client scannt mit denselben Namens-Regeln wie CruxCoach,
-verbindet sich und sendet einen Beispiel-Climb — bei Aurora-Boards drei
-Holds in den Farben des jeweiligen Boards, beim MoonBoard einen
-ASCII-Frame wie aus CruxCoachs `MoonBoardFrameEncoder`.
+The test client scans using the same naming rules as CruxCoach, connects
+and sends a sample climb — for Aurora boards three holds in the
+respective board's colors, for the MoonBoard an ASCII frame like the one
+from CruxCoach's `MoonBoardFrameEncoder`.
 
-### Unit-Tests
+### Unit tests
 
-Die Tests benötigen weder Root noch einen Bluetooth-Adapter:
+The tests require neither root nor a Bluetooth adapter:
 
 ```bash
 venv/bin/python -m pytest tests/ -q
 ```
 
-## Architektur
+## Architecture
 
 ```
-main.py                 CLI → Session → BLE-Peripheral + Renderer
-boards.py               Registry: 7 Boards, 2 Protokollfamilien
+main.py                 CLI → Session → BLE peripheral + renderer
+boards.py               Registry: 7 boards, 2 protocol families
 protocols/
-  session.py            Familien-Verdrahtung: GATT-Profil, Decoder, State
-  aurora_decoder.py     Aurora-Binärprotokoll (API Level 2 + 3)
-  aurora_encoder.py     Referenz-Encoder (CruxCoach BoardPacketEncoder-Port)
-  moonboard.py          MoonBoard-ASCII-Frames (NUS)
+  session.py            Family wiring: GATT profile, decoder, state
+  aurora_decoder.py     Aurora binary protocol (API level 2 + 3)
+  aurora_encoder.py     Reference encoder (CruxCoach BoardPacketEncoder port)
+  moonboard.py          MoonBoard ASCII frames (NUS)
 ble/
-  peripheral.py         BlueZ D-Bus Peripheral + Fail-fast-Preflight
-  gatt.py               GATT-Profil → D-Bus-Objekte
-  advertising.py        Extended-Advertising-HCI-Helfer
-render/                 GUI + Headless je Familie
-board_geometry.py       LED↔Loch-Koordinaten, Edges, Rollen (SQLite)
-board_state.py          Thread-sicherer Board-Zustand je Familie
-role_colors.py          Wire-Farbe → board-lokale Rolle
-data/<brand>.sqlite3    Getrimmte offizielle Board-DBs
-assets/<brand>/         Board-Bilder bzw. -Fotos + Koordinaten-Maps
+  peripheral.py         BlueZ D-Bus peripheral + fail-fast preflight
+  gatt.py               GATT profile → D-Bus objects
+  advertising.py        Extended-Advertising HCI helpers
+render/                 GUI + headless per family
+board_geometry.py       LED↔hole coordinates, edges, roles (SQLite)
+board_state.py          Thread-safe board state per family
+role_colors.py          Wire color → board-local role
+data/<brand>.sqlite3    Trimmed official board DBs
+assets/<brand>/         Board images / photos + coordinate maps
 ```
 
-Die BLE-Peripheral-Schicht (BlueZ/D-Bus) ist **geteilt**; pro
-Protokollfamilie unterscheiden sich nur GATT-Form/Advertising
-(deklaratives `GattProfile`) und der Decoder.
+The BLE peripheral layer (BlueZ/D-Bus) is **shared**; only the GATT
+shape/advertising (declarative `GattProfile`) and the decoder differ per
+protocol family.
 
-## Board-Identität & Erkennung
+## Board identity & detection
 
-### Aurora-Familie (Kilter + 5 Boards)
+### Aurora family (Kilter + 5 boards)
 
-Alle sechs Boards sprechen dasselbe Aurora-Protokoll — die
-Brand-Identität steckt ausschließlich im advertised Namen:
+All six boards speak the same Aurora protocol — the brand identity lives
+exclusively in the advertised name:
 
-- **Offizielle Brand-Apps** akzeptieren jedes Gerät, dessen Name ihren
-  Filter-Substring **enthält** (case-sensitive): `Kilter`, `Tension`,
-  `Grasshopper`, `Decoy`, `So iLL`, `Touchstone`. API-Level aus dem
-  `@N`-Suffix (Default 2), Seriennummer aus dem `#…`-Suffix.
-- **CruxCoach 0.2.0** parst `Name#serial@apiLevel`, normalisiert den
-  Namensteil (lowercase, Leerzeichen/Bindestriche entfernt) und matcht
-  den Brand-**Präfix**; Kilter ist der Fallback für jeden nicht
-  erkannten Aurora-Namen.
+- **Official brand apps** accept any device whose name **contains** their
+  filter substring (case-sensitive): `Kilter`, `Tension`,
+  `Grasshopper`, `Decoy`, `So iLL`, `Touchstone`. API level from the
+  `@N` suffix (default 2), serial number from the `#…` suffix.
+- **CruxCoach 0.2.0** parses `Name#serial@apiLevel`, normalizes the name
+  part (lowercase, strip spaces/hyphens) and matches the brand
+  **prefix**; Kilter is the fallback for any unrecognized Aurora name.
 
-| Zweck | UUID |
-|-------|------|
-| Advertising-/Discovery-Service (leer) | `4488B571-7806-4DF6-BCFF-A2897E4953FF` |
-| UART-Service (Datenübertragung) | `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` |
-| RX-Characteristic (App schreibt Climbs) | `6E400002-B5A3-F393-E0A9-E50E24DCCA9E` |
+| Purpose | UUID |
+|---------|------|
+| Advertising/discovery service (empty) | `4488B571-7806-4DF6-BCFF-A2897E4953FF` |
+| UART service (data transfer) | `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` |
+| RX characteristic (app writes climbs) | `6E400002-B5A3-F393-E0A9-E50E24DCCA9E` |
 
-**Paketformat:**
+**Packet format:**
 ```
-[0x01] [Datenlänge] [Checksum] [0x02] [Position-Code] [Hold-Daten...] [0x03]
+[0x01] [data length] [checksum] [0x02] [position code] [hold data...] [0x03]
 ```
-API 3: 3 Bytes/Hold (16-Bit-LED-Position + RGB332); API 2: 2 Bytes/Hold
-(10-Bit-Position, 2 Bit/Kanal, 18-W-Power-Budget). Checksum:
-`(~Summe) & 0xFF`. 20-Byte-BLE-Chunks werden reassembliert; ein leeres
-Paket löscht das Board.
+API 3: 3 bytes/hold (16-bit LED position + RGB332); API 2: 2 bytes/hold
+(10-bit position, 2 bits/channel, 18 W power budget). Checksum:
+`(~sum) & 0xFF`. 20-byte BLE chunks are reassembled; an empty packet
+clears the board.
 
 ### MoonBoard
 
-Ein MoonBoard exponiert **nur** den Nordic-UART-Service und advertised
-dessen UUID selbst; der Name ist das bloße `MoonBoard` (Präfix-Match in
-App und CruxCoach). Die TX-Characteristic (`6E400003-…`) ist ein
-Notify-Stub.
+A MoonBoard exposes **only** the Nordic UART service and advertises its
+UUID itself; the name is the bare `MoonBoard` (prefix match in app and
+CruxCoach). The TX characteristic (`6E400003-…`) is a notify stub.
 
-**Frame-Format:** `l#<token><pos>,<token><pos>,...#`, z. B.
-`l#S0,P1,E197#`. Tokens (case-insensitive): `S`=Start, `R`/`P`=Hand,
-`L`=linke Hand, `M`=Match, `F`=Fuß, `E`=Finish. `<pos>` ist die
-0-indizierte serielle Strip-Position auf dem serpentinen-verdrahteten
-LED-Strip (gerade Spalten von unten nach oben, ungerade von oben nach
-unten; Spaltenhöhe 18 bzw. 12 beim Mini 2020). Auch die
-`~`-Config-Varianten (`~D…#` = Aux-LEDs über den Griffen) werden
-dekodiert.
+**Frame format:** `l#<token><pos>,<token><pos>,...#`, e.g.
+`l#S0,P1,E197#`. Tokens (case-insensitive): `S`=start, `R`/`P`=hand,
+`L`=left hand, `M`=match, `F`=foot, `E`=finish. `<pos>` is the
+0-indexed serial strip position on the serpentine-wired LED strip (even
+columns bottom to top, odd columns top to bottom; column height 18, or
+12 on the Mini 2020). The `~` config variants (`~D…#` = aux LEDs above
+the holds) are decoded as well.
 
-### Rollen & Farben (board-lokal!)
+### Roles & colors (board-local!)
 
 | Board | start | middle | finish | foot |
 |-------|-------|--------|--------|------|
@@ -238,44 +235,44 @@ dekodiert.
 | Tension / Grasshopper / Decoy / Touchstone | `00FF00` | `0000FF` | `FF0000` | `FF00FF` |
 | So iLL | `00FF00` | `FF00FF` | `FFFFFF` | `00FFFF` |
 
-Der Simulator löst dekodierte Farben über die board-eigene Palette zurück
-zur Rolle auf (GUI: Screen-Farbe der Rolle, Headless: Rollen-Buchstabe).
-MoonBoard-Rollenfarben kommen aus dem Token (Start=Grün, Hand=Blau,
-Finish=Rot, Fuß=Cyan, …).
+The simulator resolves decoded colors back to the role via the board's
+own palette (GUI: screen color of the role, headless: role letter).
+MoonBoard role colors come from the token (start=green, hand=blue,
+finish=red, foot=cyan, …).
 
-## Datengrundlage
+## Data provenance
 
-`data/<brand>.sqlite3` sind getrimmte Kopien der offiziellen
-Board-Datenbanken (nur Geometrie/Identität). Die fünf
-Aurora-Familien-DBs erzeugt `tools/build_data.py` aus einem lokalen
-Quell-Workspace; `data/kilter.sqlite3` erzeugt `tools/trim_kilter_db.py`
-aus einer vollen Kilter-DB (beschränkt auf Original + Homewall).
-`assets/kilter/board_10.webp` ist aus den beiden Hold-Ebenen
-(Bolt-ons + Screw-ons) des KilterSimulator komponiert; die
-MoonBoard-Fotos + Koordinaten-Maps stammen aus dem MoonSimulator.
-Endnutzer brauchen keines der Skripte.
+`data/<brand>.sqlite3` are trimmed copies of the official board
+databases (geometry/identity only). The five Aurora-family DBs are
+generated by `tools/build_data.py` from a local source workspace;
+`data/kilter.sqlite3` is generated by `tools/trim_kilter_db.py` from a
+full Kilter DB (restricted to Original + Homewall).
+`assets/kilter/board_10.webp` is composited from the two hold layers
+(bolt-ons + screw-ons) of the KilterSimulator; the MoonBoard photos +
+coordinate maps come from the MoonSimulator. End users need none of
+these scripts.
 
 ## Troubleshooting
 
-### „Bluetooth unavailable" beim Start
-Der Fail-fast-Preflight hat BlueZ oder den Adapter nicht gefunden:
-- BlueZ installiert/gestartet? `systemctl status bluetooth`
-- Adapter vorhanden und aktiv? `hciconfig` → `sudo hciconfig hci0 up`
-- Auf Maschinen ohne Bluetooth laufen nur `--list` und die Tests.
+### "Bluetooth unavailable" at startup
+The fail-fast preflight did not find BlueZ or the adapter:
+- BlueZ installed/started? `systemctl status bluetooth`
+- Adapter present and up? `hciconfig` → `sudo hciconfig hci0 up`
+- On machines without Bluetooth, only `--list` and the tests run.
 
-### App findet das Board nicht
-- Läuft der Simulator als Root? (`sudo venv/bin/python main.py …`)
-- BlueZ-`Experimental = true` gesetzt und Dienst neu gestartet?
-- `hcitool` installiert? (Teil von `bluez` — wird für das
-  Advertising-Rewrite benötigt)
+### App doesn't find the board
+- Is the simulator running as root? (`sudo venv/bin/python main.py …`)
+- BlueZ `Experimental = true` set and the service restarted?
+- `hcitool` installed? (part of `bluez` — needed for the advertising
+  rewrite)
 
-### Verbindung bricht nach dem ersten Climb ab
-Normal bei manchen Android-Versionen — der Simulator startet das
-Advertising automatisch neu; einfach erneut verbinden.
+### Connection drops after the first climb
+Normal on some Android versions — the simulator restarts advertising
+automatically; just reconnect.
 
-## Hinweis
+## Note
 
-Echte BLE-Verifikation gegen die offiziellen Apps/CruxCoach erfordert
-eine Maschine mit Bluetooth-Adapter und ist manuell durchzuführen; die
-Unit-Tests decken Protokoll, Geometrie und Registry ab, ersetzen aber
-keinen Gerätetest.
+Real BLE verification against the official apps/CruxCoach requires a
+machine with a Bluetooth adapter and must be done manually; the unit
+tests cover protocol, geometry and registry but do not replace a device
+test.
