@@ -20,12 +20,6 @@ CruxCoach. Climb frames that are sent are decoded and visualized live —
 either in a Tkinter GUI (board image or board photo) or in headless mode
 as an ASCII grid on stdout.
 
-> **This repo supersedes the three individual simulators:**
-> `KilterSimulator`, `AuroraSimulator` and `MoonSimulator` have been
-> merged into it. A simulator process still simulates exactly **one**
-> board. Kilter's `get_board_details.py`/`led_position_parser.py` are
-> replaced by `--list` and `board_geometry.py` respectively.
-
 ## Requirements
 
 - **Python** 3.10+
