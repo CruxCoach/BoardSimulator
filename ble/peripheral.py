@@ -114,23 +114,17 @@ class BLEPeripheral:
         self._thread: threading.Thread | None = None
         self._running = False
         self._bus: MessageBus | None = None
+        # "BlueZ reports a connected Device1" — one of two link-state sources,
+        # reconciled in _serve(). BlueZ does not create a Device1 object for
+        # every central (random resolvable addresses), so this can stay False
+        # for the whole lifetime of a real connection.
         self._connected = False
-        # Fallback connection tracking for devices that D-Bus doesn't track
-        # (e.g., Android 9 with random resolvable BLE addresses).
-        self._gatt_active = False
+        # "The controller reports an LE connection" — the other source, polled
+        # via hcitool. Independent of BlueZ's device bookkeeping.
+        self._hci_link = False
 
     def _handle_gatt_write(self, data: bytes) -> None:
-        """Wrapper around the user's on_data callback with connection tracking.
-
-        When BlueZ doesn't create a D-Bus Device1 object for a connected device
-        (happens with Android 9's random resolvable addresses), the D-Bus
-        PropertiesChanged signal never fires. But GATT WriteValue IS called,
-        so we use it to detect these "phantom" connections. A periodic poll
-        of `hcitool con` then detects when the device disconnects.
-        """
-        if not self._connected and not self._gatt_active:
-            self._gatt_active = True
-            logger.info("GATT write from untracked device — enabling HCI poll fallback")
+        """Pass a GATT write through to the session decoder."""
         self._on_data(data)
 
     async def _check_hci_connections(self) -> bool:
@@ -256,7 +250,36 @@ class BLEPeripheral:
         logger.info("Advertising UUID: %s", uuid)
         logger.info("BLE peripheral ready — waiting for connections")
 
-        # -- Monitor connection state via D-Bus signals ----------------
+        # -- Monitor connection state ----------------------------------
+        # Two independent sources feed one reconciler: BlueZ's D-Bus signals
+        # and a periodic HCI poll. Either can miss an event — BlueZ never
+        # creates a Device1 object for some centrals, and hcitool may be
+        # absent — so neither alone is trustworthy. Routing both through a
+        # single edge-triggered function means a miss on one side is covered
+        # by the other, and no callback can fire twice for the same edge.
+        #
+        # This replaces a fallback that only armed after the first GATT write:
+        # a central that connected and disconnected without ever writing (the
+        # app's connect / capacity-probe / disconnect cycle) was never noticed,
+        # so advertising was never restarted and the board stayed invisible.
+        link_up = False
+
+        def _reconcile_link(now_up: bool, source: str) -> None:
+            nonlocal link_up
+            if now_up == link_up:
+                return
+            link_up = now_up
+            if now_up:
+                logger.info("Central connected (%s)", source)
+                if self._on_connect:
+                    self._on_connect()
+            else:
+                logger.info("Central disconnected (%s) — restarting advertising", source)
+                if self._on_disconnect:
+                    self._on_disconnect()
+                asyncio.ensure_future(self._restart_advertising(
+                    adapter_props, uuid, board_name))
+
         def _on_properties_changed(msg: Message) -> None:
             if msg.message_type != MessageType.SIGNAL:
                 return
@@ -276,22 +299,8 @@ class BLEPeripheral:
             if "Connected" not in changed:
                 return
 
-            connected = changed["Connected"].value
-            if connected and not self._connected:
-                self._connected = True
-                self._gatt_active = False  # D-Bus is tracking — disable fallback
-                logger.info("Device connected: %s", path)
-                if self._on_connect:
-                    self._on_connect()
-            elif not connected and self._connected:
-                self._connected = False
-                self._gatt_active = False
-                logger.info("Device disconnected: %s", path)
-                if self._on_disconnect:
-                    self._on_disconnect()
-                # Restart advertising so the next client can connect
-                asyncio.ensure_future(self._restart_advertising(
-                    adapter_props, uuid, board_name))
+            self._connected = bool(changed["Connected"].value)
+            _reconcile_link(self._connected or self._hci_link, f"D-Bus {path}")
 
         self._bus.add_message_handler(_on_properties_changed)
 
@@ -319,19 +328,13 @@ class BLEPeripheral:
                 await asyncio.sleep(0.5)
                 poll_ticks += 1
 
-                # Every 2s: check for disconnects that D-Bus missed
+                # Every 2s: ask the controller directly. Runs unconditionally —
+                # gating it on prior activity is what let a silent connect /
+                # disconnect slip through unnoticed.
                 if poll_ticks >= 4:
                     poll_ticks = 0
-                    if self._gatt_active and not self._connected:
-                        has_conn = await self._check_hci_connections()
-                        if not has_conn:
-                            self._gatt_active = False
-                            logger.info("Fallback: disconnect detected via HCI poll "
-                                        "(D-Bus missed this device)")
-                            if self._on_disconnect:
-                                self._on_disconnect()
-                            asyncio.ensure_future(self._restart_advertising(
-                                adapter_props, uuid, board_name))
+                    self._hci_link = await self._check_hci_connections()
+                    _reconcile_link(self._connected or self._hci_link, "HCI poll")
         finally:
             # Explicitly tear the GATT app + advertising down on this loop so a
             # board switch leaves NO stale application registered with BlueZ.
