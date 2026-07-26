@@ -27,6 +27,11 @@ LABEL_FG = "#9aa0aa"
 LABEL_FONT = ("Helvetica", 9)
 
 
+CONNECTION_SINGLE = "single"
+CONNECTION_MULTI = "multi"
+CONNECTION_CHOICES = (CONNECTION_SINGLE, CONNECTION_MULTI)
+
+
 class BoardBar:
     """Board / Layout / Size dropdowns.
 
@@ -38,9 +43,12 @@ class BoardBar:
     """
 
     def __init__(self, parent: tk.Misc, current: Selection,
-                 on_switch: Callable[[Selection], None]) -> None:
+                 on_switch: Callable[[Selection], None],
+                 multi_connect: bool = False,
+                 on_connections: Callable[[bool], None] | None = None) -> None:
         self._current = current
         self._on_switch = on_switch
+        self._on_connections = on_connections
         self._frame = tk.Frame(parent, bg=BAR_BG)
 
         self._board_to_key = {dn: k for k, dn in sel.board_choices()}
@@ -66,6 +74,18 @@ class BoardBar:
                                   sel.effective_size_id(current)),
                 self._on_size, width=22)
 
+        # Connection character. Unlike the three above this changes nothing
+        # about the board — it only decides whether the controller keeps
+        # advertising while a client is on, so it is applied live instead of
+        # rebuilding the panel. "single" is what real Aurora hardware does
+        # and the mode CruxRelay is meant for.
+        self._connections_var = None
+        if self._on_connections is not None:
+            self._connections_var = self._add_combo(
+                "Connections", list(CONNECTION_CHOICES),
+                CONNECTION_MULTI if multi_connect else CONNECTION_SINGLE,
+                self._on_connections_pick, width=8)
+
     def pack(self, **kwargs) -> "BoardBar":
         self._frame.pack(**kwargs)
         return self
@@ -89,6 +109,11 @@ class BoardBar:
         combo.pack(side=tk.LEFT, padx=(0, 4))
         combo.bind("<<ComboboxSelected>>", handler)
         return var
+
+    def _on_connections_pick(self, _event=None) -> None:
+        if self._on_connections is None or self._connections_var is None:
+            return
+        self._on_connections(self._connections_var.get() == CONNECTION_MULTI)
 
     def _on_board(self, _event=None) -> None:
         key = self._board_to_key.get(self._board_var.get())

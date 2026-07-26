@@ -63,7 +63,9 @@ class BoardGUI:
     def __init__(self, parent: tk.Misc, geometry: BoardGeometry, ble_name: str,
                  resolver: RoleColorResolver | None = None,
                  selection: Selection | None = None,
-                 on_switch: Callable[[Selection], None] | None = None) -> None:
+                 on_switch: Callable[[Selection], None] | None = None,
+                 multi_connect: bool = False,
+                 on_connections: Callable[[bool], None] | None = None) -> None:
         self._parent = parent
         self._geometry = geometry
         self._resolver = resolver
@@ -89,7 +91,9 @@ class BoardGUI:
 
         # Live board switcher — the controller rebuilds this panel + BLE on a pick.
         if selection is not None and on_switch is not None:
-            BoardBar(parent, selection, on_switch).pack(fill=tk.X, side=tk.TOP)
+            BoardBar(parent, selection, on_switch,
+                     multi_connect=multi_connect,
+                     on_connections=on_connections).pack(fill=tk.X, side=tk.TOP)
 
         # Canvas
         self._canvas = tk.Canvas(

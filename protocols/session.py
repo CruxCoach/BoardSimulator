@@ -86,7 +86,8 @@ class Session:
         """Build the headless renderer (stdout grid) and wire it to the state."""
         raise NotImplementedError
 
-    def create_panel(self, parent, selection, on_switch):
+    def create_panel(self, parent, selection, on_switch,
+                     multi_connect=False, on_connections=None):
         """Build the Tk GUI panel into ``parent`` and wire it to the state.
 
         Must be called from the main thread (Tkinter requirement). The
@@ -133,11 +134,14 @@ class AuroraSession(Session):
         self.state.register_callback(renderer.update_holds)
         return renderer
 
-    def create_panel(self, parent, selection, on_switch):
+    def create_panel(self, parent, selection, on_switch,
+                     multi_connect=False, on_connections=None):
         # Imported lazily so headless boxes without Tk still run.
         from render.aurora_gui import BoardGUI
         panel = BoardGUI(parent, self.geometry, self.ble_name, self.resolver,
-                         selection=selection, on_switch=on_switch)
+                         selection=selection, on_switch=on_switch,
+                         multi_connect=multi_connect,
+                         on_connections=on_connections)
         self.state.register_callback(panel.update_holds)
         return panel
 
@@ -184,11 +188,14 @@ class MoonSession(Session):
         self.state.register_callback(renderer.update_holds)
         return renderer
 
-    def create_panel(self, parent, selection, on_switch):
+    def create_panel(self, parent, selection, on_switch,
+                     multi_connect=False, on_connections=None):
         # Imported lazily so headless boxes without Tk still run.
         from render.moon_gui import MoonBoardGUI
         panel = MoonBoardGUI(parent, self.board, self.variant,
-                             selection=selection, on_switch=on_switch)
+                             selection=selection, on_switch=on_switch,
+                             multi_connect=multi_connect,
+                             on_connections=on_connections)
         self.state.register_callback(panel.update_holds)
         return panel
 

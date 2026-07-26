@@ -129,6 +129,22 @@ def _hcitool_cmd(label: str, ogf_ocf: str, params: list[str]) -> bool:
         return False
 
 
+def disable_extended_adv() -> bool:
+    """Stop advertising on handle 0x00.
+
+    Used to emulate an exclusive controller: a peripheral can only be
+    connected to WHILE it advertises, so switching off the advertisement is
+    what makes a board look "one client at a time" to everyone else.
+    """
+    return _hcitool_cmd("ext adv disable", "0x08 0x0039", [
+        "00",              # Enable: disabled
+        "01",              # Number_of_Sets: 1
+        "00",              # Handle: 0x00
+        "00", "00",        # Duration: 0 (no limit)
+        "00",              # Max_Events: 0 (no limit)
+    ])
+
+
 def set_extended_adv_data(uuid_str: str, name: str) -> bool:
     """Set up Extended Advertising with legacy PDU on handle 0x00.
 

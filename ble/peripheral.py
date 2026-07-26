@@ -26,7 +26,7 @@ from typing import Callable
 from dbus_fast.aio import MessageBus
 from dbus_fast import BusType, Message, MessageType, Variant
 
-from ble.advertising import set_extended_adv_data
+from ble.advertising import disable_extended_adv, set_extended_adv_data
 from ble.gatt import GattProfile, build_application
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,21 @@ GATT_MANAGER_IFACE = "org.bluez.GattManager1"
 
 class BlueZUnavailableError(RuntimeError):
     """BlueZ or a Bluetooth adapter is missing — live BLE cannot work."""
+
+
+def should_advertise(link_count: int, multi_connect: bool) -> bool:
+    """Whether the board should be advertising right now.
+
+    A peripheral is connectable only WHILE it advertises, so this single
+    predicate is what separates the two controller characters the simulator
+    can play:
+
+    * ``multi_connect`` — advertise regardless of who is already connected,
+      the way a controller with free slots does;
+    * exclusive — go quiet as soon as a central is on, which is what real
+      Aurora hardware does and what CruxRelay exists for.
+    """
+    return multi_connect or link_count == 0
 
 
 async def _async_preflight() -> None:
@@ -103,7 +118,8 @@ class BLEPeripheral:
                  on_data: Callable[[bytes], None],
                  on_connect: Callable[[], None] | None = None,
                  on_disconnect: Callable[[], None] | None = None,
-                 on_fatal: Callable[[BaseException], None] | None = None) -> None:
+                 on_fatal: Callable[[BaseException], None] | None = None,
+                 multi_connect: bool = False) -> None:
         self._ble_name = ble_name
         self._profile = profile
         self._on_data = on_data
@@ -131,6 +147,42 @@ class BLEPeripheral:
         # advertising sequences on the same set.
         self._link_lock = asyncio.Lock()
         self._adv_lock = asyncio.Lock()
+        # Which controller character to play — see should_advertise(). Real
+        # Aurora hardware is exclusive, so that is the default; multi is for
+        # testing the app against a board that takes several clients.
+        self._multi_connect = multi_connect
+        # Set once _serve() knows them, so a runtime mode change can act.
+        self._adv_context: tuple | None = None
+
+    @property
+    def multi_connect(self) -> bool:
+        return self._multi_connect
+
+    def set_multi_connect(self, enabled: bool) -> None:
+        """Switch the connection character while running.
+
+        Takes effect immediately: turning it off silences a board that is
+        already connected (nobody else gets in), turning it on brings the
+        advertisement back for the next client.
+        """
+        if enabled == self._multi_connect:
+            return
+        self._multi_connect = enabled
+        logger.info("Connection mode → %s", "multi" if enabled else "single")
+        loop, ctx = self._loop, self._adv_context
+        if loop is None or ctx is None:
+            return
+        asyncio.run_coroutine_threadsafe(self._apply_advertising_mode(*ctx), loop)
+
+    async def _apply_advertising_mode(self, adapter_props, uuid: str,
+                                      name: str) -> None:
+        if should_advertise(self._link_count, self._multi_connect):
+            await self._restart_advertising(adapter_props, uuid, name,
+                                            reason="mode change")
+        else:
+            async with self._adv_lock:
+                logger.info("Going quiet — exclusive mode with a client connected")
+                disable_extended_adv()
 
     def _handle_gatt_write(self, data: bytes) -> None:
         """Pass a GATT write through to the session decoder."""
@@ -292,6 +344,10 @@ class BLEPeripheral:
                 board_name)
 
         logger.info("Advertising UUID: %s", uuid)
+        logger.info("Connection mode: %s",
+                    "multi" if self._multi_connect else "single (exclusive)")
+        # Lets set_multi_connect() act on a running peripheral.
+        self._adv_context = (adapter_props, uuid, board_name)
         logger.info("BLE peripheral ready — waiting for connections")
 
         # -- Monitor connection state ----------------------------------
@@ -338,16 +394,17 @@ class BLEPeripheral:
                 if not changed:
                     return
                 logger.info("%d central(s) connected (%s)", effective, source)
-                # Advertising is restarted on EVERY change, not just when the
-                # last client leaves. A connection ends the advertisement that
-                # carried it (a legacy ADV_IND is consumed by the CONNECT_IND),
-                # and a peripheral can only be connected to WHILE it advertises
-                # — so without this the board goes silent after the first
-                # central and no second one can join, however many slots the
-                # controller still has free. That silence is exactly what the
-                # app's capacity probe was seeing.
-                asyncio.ensure_future(self._restart_advertising(
-                    adapter_props, uuid, board_name, reason=source))
+                # A connection ends the advertisement that carried it (a legacy
+                # ADV_IND is consumed by the CONNECT_IND), and a peripheral can
+                # only be connected to WHILE it advertises. So in multi mode
+                # EVERY change puts it back up — otherwise the board goes
+                # silent after the first central and no second one can join,
+                # however many slots the controller has free. In exclusive
+                # mode only the last disconnect does, which is what real Aurora
+                # hardware looks like from the outside.
+                if should_advertise(effective, self._multi_connect):
+                    asyncio.ensure_future(self._restart_advertising(
+                        adapter_props, uuid, board_name, reason=source))
 
         def _on_properties_changed(msg: Message) -> None:
             if msg.message_type != MessageType.SIGNAL:

@@ -88,6 +88,14 @@ def _parse_args() -> argparse.Namespace:
              f"(default: {config.BOARD_SERIAL}); Aurora-protocol boards only.",
     )
     parser.add_argument(
+        "--connections", default="single", choices=("single", "multi"),
+        help="How many centrals the emulated controller accepts at once. "
+             "'single' matches real Aurora hardware — it stops advertising "
+             "while a client is on, which is what CruxRelay exists for. "
+             "'multi' keeps advertising so several apps can connect. "
+             "Switchable at runtime in the GUI (default: %(default)s).",
+    )
+    parser.add_argument(
         "--headless", action="store_true",
         help="Run without the Tkinter GUI; log decoded holds to stdout. "
              "Can also be enabled via the BOARDSIM_HEADLESS env var.",
@@ -119,7 +127,7 @@ def _build_session(sel, api_level, serial):
     return board, variant, session
 
 
-def _run_headless(session) -> int:
+def _run_headless(session, multi_connect: bool) -> int:
     """Single board, no GUI: wait for BLE writes until Ctrl+C or a fatal
     peripheral error. Headless has no board bar — switch by restarting."""
     from ble.peripheral import BLEPeripheral
@@ -143,6 +151,7 @@ def _run_headless(session) -> int:
         on_connect=lambda: renderer.update_status("Verbunden"),
         on_disconnect=lambda: renderer.update_status("Advertising..."),
         on_fatal=lambda exc: shutdown(fatal=True),
+        multi_connect=multi_connect,
     )
     signal.signal(signal.SIGINT, lambda *_: shutdown())
     try:
@@ -157,7 +166,7 @@ def _run_headless(session) -> int:
     return state["code"]
 
 
-def _run_gui(selection, api_level, serial) -> int:
+def _run_gui(selection, api_level, serial, multi_connect: bool) -> int:
     """GUI mode: ONE persistent Tk root; a board-bar pick tears down the
     current panel + BLE peripheral and rebuilds them for the new board.
 
@@ -175,7 +184,7 @@ def _run_gui(selection, api_level, serial) -> int:
     root = tk.Tk()
     root.configure(bg="#1a1a1a")
     root.resizable(False, False)
-    state: dict = {"ble": None, "fatal": False}
+    state: dict = {"ble": None, "fatal": False, "multi": multi_connect}
 
     def teardown() -> None:
         # Stop BLE first (joins its thread) so no more root.after() updates
@@ -200,16 +209,25 @@ def _run_gui(selection, api_level, serial) -> int:
         teardown()
         build(new_sel)
 
+    def set_connections(multi: bool) -> None:
+        # Live switch: the peripheral brings advertising up or takes it down
+        # itself, so neither the panel nor the BLE thread is rebuilt.
+        state["multi"] = multi
+        if state["ble"] is not None:
+            state["ble"].set_multi_connect(multi)
+
     def build(sel) -> None:
         board, variant, session = _build_session(sel, api_level, serial)
         root.title(session.window_title)
-        panel = session.create_panel(root, sel, switch)
+        panel = session.create_panel(root, sel, switch, state["multi"],
+                                     set_connections)
         ble = BLEPeripheral(
             ble_name=session.ble_name, profile=session.gatt_profile,
             on_data=session.feed,
             on_connect=lambda p=panel: p.update_status("Verbunden"),
             on_disconnect=lambda p=panel: p.update_status("Advertising..."),
             on_fatal=lambda exc: root.after(0, close, True),
+            multi_connect=state["multi"],
         )
         state["ble"] = ble
         logger.info("Board: %s — %s [%s protocol]", board.display_name,
@@ -256,6 +274,8 @@ def main() -> int:
     logger.info("Board: %s — %s [%s protocol]", board.display_name,
                 variant.display_name, board.protocol)
     logger.info("Mode: %s", "headless" if headless else "GUI")
+    multi = args.connections == "multi"
+    logger.info("Connections: %s", args.connections)
 
     # Fail fast on machines without BlueZ / a Bluetooth adapter instead of
     # silently advertising into the void.
@@ -270,8 +290,8 @@ def main() -> int:
 
     try:
         if headless:
-            return _run_headless(session)
-        return _run_gui(sel, args.api_level, args.serial)
+            return _run_headless(session, multi)
+        return _run_gui(sel, args.api_level, args.serial, multi)
     finally:
         logger.info("Goodbye")
 
