@@ -119,16 +119,60 @@ class BLEPeripheral:
         # every central (random resolvable addresses), so this can stay False
         # for the whole lifetime of a real connection.
         self._connected = False
-        # "The controller reports an LE connection" — the other source, polled
-        # via hcitool. Independent of BlueZ's device bookkeeping.
+        # "The controller reports an LE connection" — a last-resort source,
+        # polled via hcitool. Independent of BlueZ's device bookkeeping, but
+        # unreliable in the negative, so it may only ever add a link.
         self._hci_link = False
+        # Last known number of connected centrals; the simulator supports
+        # several at once, so the count is worth seeing when it changes.
+        self._link_count = 0
+        # A D-Bus signal and the 2 s poll can land together. Without these,
+        # both would see the same change and start two overlapping HCI
+        # advertising sequences on the same set.
+        self._link_lock = asyncio.Lock()
+        self._adv_lock = asyncio.Lock()
 
     def _handle_gatt_write(self, data: bytes) -> None:
         """Pass a GATT write through to the session decoder."""
         self._on_data(data)
 
+    async def _count_dbus_connections(self) -> int:
+        """Number of centrals BlueZ reports as connected to this adapter.
+
+        Asks BlueZ itself (ObjectManager) rather than parsing ``hcitool``,
+        which is deprecated and on current kernels prints no LE links at all.
+        A silent "no links" from that tool used to read as a disconnect while
+        a central was actively writing.
+        """
+        if self._bus is None:
+            return 0
+        try:
+            reply = await self._bus.call(Message(
+                destination=BLUEZ_SERVICE,
+                path="/",
+                interface="org.freedesktop.DBus.ObjectManager",
+                member="GetManagedObjects",
+            ))
+            if reply is None or reply.message_type == MessageType.ERROR:
+                return 0
+            managed = reply.body[0]
+            return sum(
+                1 for path, ifaces in managed.items()
+                if path.startswith(ADAPTER_PATH + "/dev_")
+                and ifaces.get("org.bluez.Device1", {}).get("Connected")
+                and ifaces["org.bluez.Device1"]["Connected"].value
+            )
+        except Exception as exc:
+            logger.debug("D-Bus connection count failed: %s", exc)
+            return 0
+
     async def _check_hci_connections(self) -> bool:
-        """Check if there are active LE connections via hcitool."""
+        """Whether the controller reports an LE link, via hcitool.
+
+        Kept as a THIRD opinion only. It cannot distinguish "no link" from
+        "this tool does not report LE links on this kernel", so it may only
+        ever add a link, never take one away.
+        """
         try:
             result = await asyncio.get_event_loop().run_in_executor(
                 None,
@@ -251,17 +295,19 @@ class BLEPeripheral:
         logger.info("BLE peripheral ready — waiting for connections")
 
         # -- Monitor connection state ----------------------------------
-        # Two independent sources feed one reconciler: BlueZ's D-Bus signals
-        # and a periodic HCI poll. Either can miss an event — BlueZ never
-        # creates a Device1 object for some centrals, and hcitool may be
-        # absent — so neither alone is trustworthy. Routing both through a
-        # single edge-triggered function means a miss on one side is covered
-        # by the other, and no callback can fire twice for the same edge.
+        # Every signal and every poll leads to the same question — how many
+        # centrals does BlueZ currently see? — because the answer drives two
+        # different things: the connect/disconnect callbacks (an edge) and
+        # advertising (a count).
         #
-        # This replaces a fallback that only armed after the first GATT write:
-        # a central that connected and disconnected without ever writing (the
-        # app's connect / capacity-probe / disconnect cycle) was never noticed,
-        # so advertising was never restarted and the board stayed invisible.
+        # Counting rather than tracking one device matters for the multi-client
+        # case: a single Device1 going Connected=False says nothing about the
+        # OTHER centrals still on the adapter, and treating it as "the link is
+        # down" cleared the board state under a client that was still there.
+        #
+        # hcitool remains only as a last resort for a central BlueZ never
+        # created a Device1 for. It cannot tell "no LE link" from "this kernel's
+        # hcitool does not print LE links", so it may only ever ADD a link.
         link_up = False
 
         def _reconcile_link(now_up: bool, source: str) -> None:
@@ -274,11 +320,34 @@ class BLEPeripheral:
                 if self._on_connect:
                     self._on_connect()
             else:
-                logger.info("Central disconnected (%s) — restarting advertising", source)
+                logger.info("Central disconnected (%s)", source)
                 if self._on_disconnect:
                     self._on_disconnect()
+
+        async def _recount(source: str) -> None:
+            async with self._link_lock:
+                count = await self._count_dbus_connections()
+                self._hci_link = (
+                    await self._check_hci_connections() if count == 0 else False
+                )
+                self._connected = count > 0
+                effective = count if count else (1 if self._hci_link else 0)
+                changed = effective != self._link_count
+                self._link_count = effective
+                _reconcile_link(self._connected or self._hci_link, source)
+                if not changed:
+                    return
+                logger.info("%d central(s) connected (%s)", effective, source)
+                # Advertising is restarted on EVERY change, not just when the
+                # last client leaves. A connection ends the advertisement that
+                # carried it (a legacy ADV_IND is consumed by the CONNECT_IND),
+                # and a peripheral can only be connected to WHILE it advertises
+                # — so without this the board goes silent after the first
+                # central and no second one can join, however many slots the
+                # controller still has free. That silence is exactly what the
+                # app's capacity probe was seeing.
                 asyncio.ensure_future(self._restart_advertising(
-                    adapter_props, uuid, board_name))
+                    adapter_props, uuid, board_name, reason=source))
 
         def _on_properties_changed(msg: Message) -> None:
             if msg.message_type != MessageType.SIGNAL:
@@ -299,8 +368,9 @@ class BLEPeripheral:
             if "Connected" not in changed:
                 return
 
-            self._connected = bool(changed["Connected"].value)
-            _reconcile_link(self._connected or self._hci_link, f"D-Bus {path}")
+            # Re-ask instead of trusting this one device's new value — see
+            # the multi-client note above.
+            asyncio.ensure_future(_recount(f"D-Bus {path}"))
 
         self._bus.add_message_handler(_on_properties_changed)
 
@@ -328,13 +398,12 @@ class BLEPeripheral:
                 await asyncio.sleep(0.5)
                 poll_ticks += 1
 
-                # Every 2s: ask the controller directly. Runs unconditionally —
-                # gating it on prior activity is what let a silent connect /
+                # Every 2s, unconditionally: a signal can be missed, and gating
+                # the poll on prior activity is what let a silent connect /
                 # disconnect slip through unnoticed.
                 if poll_ticks >= 4:
                     poll_ticks = 0
-                    self._hci_link = await self._check_hci_connections()
-                    _reconcile_link(self._connected or self._hci_link, "HCI poll")
+                    await _recount("poll")
         finally:
             # Explicitly tear the GATT app + advertising down on this loop so a
             # board switch leaves NO stale application registered with BlueZ.
@@ -369,23 +438,27 @@ class BLEPeripheral:
         except Exception as exc:
             logger.debug("bus disconnect failed: %s", exc)
 
-    async def _restart_advertising(self, adapter_props, uuid: str, name: str) -> None:
-        """Restart advertising after a disconnect so new clients can connect."""
-        logger.info("Restarting advertising after disconnect...")
-        await asyncio.sleep(1.0)  # Give BlueZ time to clean up
+    async def _restart_advertising(self, adapter_props, uuid: str, name: str,
+                                   reason: str = "") -> None:
+        """Put advertising back up so (further) clients can connect."""
+        async with self._adv_lock:
+            logger.info("Restarting advertising (%s)...", reason or "link change")
+            await asyncio.sleep(1.0)  # Give BlueZ time to clean up
 
-        # Re-enable Discoverable (BlueZ may have turned it off)
-        try:
-            await adapter_props.call_set(
-                "org.bluez.Adapter1", "Discoverable", Variant("b", True))
-            logger.info("Adapter.Discoverable re-enabled")
-        except Exception as e:
-            logger.warning("Could not re-enable Discoverable: %s", e)
+            # Re-enable Discoverable (BlueZ may have turned it off)
+            try:
+                await adapter_props.call_set(
+                    "org.bluez.Adapter1", "Discoverable", Variant("b", True))
+                logger.info("Adapter.Discoverable re-enabled")
+            except Exception as e:
+                logger.warning("Could not re-enable Discoverable: %s", e)
 
-        await asyncio.sleep(0.5)
+            await asyncio.sleep(0.5)
 
-        # Re-inject UUID into advertising data
-        if set_extended_adv_data(uuid, name):
-            logger.info("Advertising restarted with UUID")
-        else:
-            logger.warning("Could not re-inject UUID into advertising")
+            # Re-inject UUID into advertising data. On a controller that is out
+            # of connection slots the enable command fails — that is a correct
+            # refusal, not an error to work around.
+            if set_extended_adv_data(uuid, name):
+                logger.info("Advertising restarted with UUID")
+            else:
+                logger.warning("Could not re-inject UUID into advertising")
