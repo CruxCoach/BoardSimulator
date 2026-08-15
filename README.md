@@ -25,7 +25,9 @@ as an ASCII grid on stdout.
 - **Python** 3.10+
 - **Linux** with BlueZ
 - **Bluetooth adapter** with BLE support (only for live BLE;
-  `--list` and the tests run without one)
+  `--list` and the tests run without one) — one adapter per simulated
+  board, so two boards at once need two adapters (see
+  [Two boards at once](#two-boards-at-once-two-adapters-two-realms))
 - **System packages:**
   ```bash
   sudo apt install bluez bluetooth python3-tk
@@ -103,6 +105,7 @@ python main.py --list
 | `--size` | layout default | Aurora `product_size_id` (see `--list`) — Aurora boards only |
 | `--api-level` | `3` | Aurora protocol version (`2` or `3`), suffix `@N` in the BLE name — Aurora boards only |
 | `--serial` | `0001` | Serial number, suffix `#serial` in the BLE name — Aurora boards only |
+| `--adapter` | `hci0` | Bluetooth controller to drive (`hci0`, `hci1`, … — see `hciconfig`) |
 | `--headless` | off | ASCII grid on stdout instead of GUI (also: `BOARDSIM_HEADLESS=1`) |
 
 Aurora-specific options on the MoonBoard abort with a clear error
@@ -117,6 +120,51 @@ After starting:
 3. Climbs that are sent are visualized live — with the **board's own**
    role colors (Kilter e.g. middle=cyan/finish=magenta, So iLL
    middle=magenta/finish=white/foot=cyan)
+
+### Two boards at once (two adapters, two realms)
+
+One process simulates one board on one controller — and **a controller
+can only be one peripheral at a time**: it has a single advertised
+identity, a single advertising set and a single GATT database. So two
+simulated boards on the same host require **two Bluetooth adapters**
+(e.g. the built-in one plus a USB BLE dongle); there is no way to split
+one adapter between two boards.
+
+Given two adapters, each process gets its own **BLE realm**. Two Kilter
+boards, in two terminals:
+
+```bash
+# Realm A — Kilter Original on the built-in controller
+sudo venv/bin/python main.py --board kilter --adapter hci0 --serial a001
+
+# Realm B — Kilter Homewall on a second (USB) controller
+sudo venv/bin/python main.py --board kilter --layout homewall \
+    --adapter hci1 --serial b002
+```
+
+They advertise as `Kilter Board#a001@3` and `Kilter Board#b002@3` — the
+serial is what lets you tell the two realms apart in the scan list of
+the app or CruxCoach, so give each instance its own (alphanumeric,
+matching the apps' `#[a-z0-9]+` parsing). `hciconfig` lists the adapter
+names available on the host.
+
+Everything that could leak between the two is scoped to `--adapter`:
+the BlueZ object path (`/org/bluez/hci1`), the connected-central count,
+the D-Bus signal subscription (`path_namespace`) and every `hcitool`
+call — both `hcitool -i hciX con` and the raw `hcitool -i hciX cmd …`
+advertising commands. Consequently:
+
+- a phone connecting to realm A does not change realm B's connection
+  state or clear its board;
+- realm A restarting or disabling its advertising leaves realm B
+  advertising;
+- stopping (or switching the board in) realm A does not touch realm B —
+  its GATT application, advertising set and D-Bus connection are its own;
+- a `--adapter` that is not present aborts at startup (fail-fast
+  preflight) instead of quietly grabbing the other realm's controller.
+
+Board switching in the GUI (below) stays inside the realm it was started
+with: a pick changes the board, never the adapter.
 
 ### Switching boards at runtime
 
@@ -162,6 +210,7 @@ protocols/
   aurora_encoder.py     Reference encoder (CruxCoach BoardPacketEncoder port)
   moonboard.py          MoonBoard ASCII frames (NUS)
 ble/
+  adapter.py            Adapter name → D-Bus path, match rule, hcitool -i
   peripheral.py         BlueZ D-Bus peripheral + fail-fast preflight
   gatt.py               GATT profile → D-Bus objects
   advertising.py        Extended-Advertising HCI helpers
@@ -249,9 +298,11 @@ these scripts.
 ## Troubleshooting
 
 ### "Bluetooth unavailable" at startup
-The fail-fast preflight did not find BlueZ or the adapter:
+The fail-fast preflight did not find BlueZ or the requested adapter:
 - BlueZ installed/started? `systemctl status bluetooth`
 - Adapter present and up? `hciconfig` → `sudo hciconfig hci0 up`
+- Right controller? The error lists the adapters BlueZ actually has —
+  pass one of them via `--adapter` (default `hci0`).
 - On machines without Bluetooth, only `--list` and the tests run.
 
 ### App doesn't find the board

@@ -12,6 +12,10 @@ Usage:
     sudo venv/bin/python main.py --board moonboard --layout mini-2020
     sudo venv/bin/python main.py --board soill --size 1 --headless
     python main.py --list        # show boards, layouts and sizes (no BLE)
+
+A second board on the same host is a second process on a second
+adapter: ``--adapter hci1`` (plus a distinct ``--serial``) gives it its
+own BLE realm, entirely independent of the one on hci0.
 """
 
 import argparse
@@ -21,6 +25,7 @@ import sys
 import threading
 
 import config
+from ble.adapter import DEFAULT_ADAPTER, InvalidAdapterError, normalize_adapter
 from boards import BOARDS, PROTOCOL_AURORA, board_for
 from selection import Selection
 
@@ -55,6 +60,18 @@ def print_board_list() -> None:
         print()
 
 
+def _adapter_arg(value: str) -> str:
+    """argparse type for --adapter: canonical name or a CLI error (exit 2).
+
+    Rejecting the name here — before the BlueZ preflight — keeps a typo a
+    plain usage error instead of a confusing "no Bluetooth" failure.
+    """
+    try:
+        return normalize_adapter(value)
+    except InvalidAdapterError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Software BLE simulator for all interactive CruxCoach "
@@ -86,6 +103,14 @@ def _parse_args() -> argparse.Namespace:
         "--serial", default=None,
         help="Board serial advertised as the '#serial' name suffix "
              f"(default: {config.BOARD_SERIAL}); Aurora-protocol boards only.",
+    )
+    parser.add_argument(
+        "--adapter", type=_adapter_arg, default=DEFAULT_ADAPTER,
+        help="Bluetooth controller to drive, e.g. hci0, hci1 "
+             "(default: %(default)s; see 'hciconfig'). One process drives "
+             "one adapter and one adapter carries one board, so two boards "
+             "on the same host means two processes on two DIFFERENT "
+             "adapters — they then form two fully independent BLE realms.",
     )
     parser.add_argument(
         "--connections", default="single", choices=("single", "multi"),
@@ -127,7 +152,8 @@ def _build_session(sel, api_level, serial):
     return board, variant, session
 
 
-def _run_headless(session, multi_connect: bool) -> int:
+def _run_headless(session, multi_connect: bool,
+                  adapter: str = DEFAULT_ADAPTER) -> int:
     """Single board, no GUI: wait for BLE writes until Ctrl+C or a fatal
     peripheral error. Headless has no board bar — switch by restarting."""
     from ble.peripheral import BLEPeripheral
@@ -152,6 +178,7 @@ def _run_headless(session, multi_connect: bool) -> int:
         on_disconnect=lambda: renderer.update_status("Advertising..."),
         on_fatal=lambda exc: shutdown(fatal=True),
         multi_connect=multi_connect,
+        adapter=adapter,
     )
     signal.signal(signal.SIGINT, lambda *_: shutdown())
     try:
@@ -166,7 +193,8 @@ def _run_headless(session, multi_connect: bool) -> int:
     return state["code"]
 
 
-def _run_gui(selection, api_level, serial, multi_connect: bool) -> int:
+def _run_gui(selection, api_level, serial, multi_connect: bool,
+             adapter: str = DEFAULT_ADAPTER) -> int:
     """GUI mode: ONE persistent Tk root; a board-bar pick tears down the
     current panel + BLE peripheral and rebuilds them for the new board.
 
@@ -176,6 +204,10 @@ def _run_gui(selection, api_level, serial, multi_connect: bool) -> int:
     thread"): the BLE thread queues canvas updates via root.after(), and
     tearing the root down underneath them frees Tcl handlers off-thread.
     Swapping only the root's children keeps the one interpreter alive.
+
+    The adapter is fixed for the whole session: the board bar changes
+    WHICH board this realm presents, never which controller it lives on,
+    so a switch on hci1 never disturbs the board running on hci0.
     """
     import tkinter as tk
 
@@ -228,11 +260,13 @@ def _run_gui(selection, api_level, serial, multi_connect: bool) -> int:
             on_disconnect=lambda p=panel: p.update_status("Advertising..."),
             on_fatal=lambda exc: root.after(0, close, True),
             multi_connect=state["multi"],
+            # Same controller across every switch — see the docstring.
+            adapter=adapter,
         )
         state["ble"] = ble
         logger.info("Board: %s — %s [%s protocol]", board.display_name,
                     variant.display_name, board.protocol)
-        logger.info("BLE name: %s", session.ble_name)
+        logger.info("BLE name: %s (on %s)", session.ble_name, adapter)
         ble.start()
 
     root.protocol("WM_DELETE_WINDOW", close)
@@ -274,14 +308,15 @@ def main() -> int:
     logger.info("Board: %s — %s [%s protocol]", board.display_name,
                 variant.display_name, board.protocol)
     logger.info("Mode: %s", "headless" if headless else "GUI")
+    logger.info("Adapter: %s", args.adapter)
     multi = args.connections == "multi"
     logger.info("Connections: %s", args.connections)
 
-    # Fail fast on machines without BlueZ / a Bluetooth adapter instead of
+    # Fail fast on machines without BlueZ / without THIS adapter instead of
     # silently advertising into the void.
     from ble.peripheral import BlueZUnavailableError, preflight_check
     try:
-        preflight_check()
+        preflight_check(args.adapter)
     except BlueZUnavailableError as exc:
         logger.error("Bluetooth unavailable: %s", exc)
         logger.error("Live BLE needs a Linux box with BlueZ and an adapter; "
@@ -290,8 +325,8 @@ def main() -> int:
 
     try:
         if headless:
-            return _run_headless(session, multi)
-        return _run_gui(sel, args.api_level, args.serial, multi)
+            return _run_headless(session, multi, args.adapter)
+        return _run_gui(sel, args.api_level, args.serial, multi, args.adapter)
     finally:
         logger.info("Goodbye")
 

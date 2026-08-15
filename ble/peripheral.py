@@ -7,11 +7,20 @@ family's service UUID into the advertising data; the board identity
 travels in the advertised name.
 
 Fail-fast: :func:`preflight_check` verifies that BlueZ (``org.bluez``)
-is reachable and a powered-capable adapter exists BEFORE the peripheral
+is reachable and the requested adapter exists BEFORE the peripheral
 thread starts — a box without Bluetooth aborts with a clear error
 instead of hanging silently (a known wart of the predecessor
 simulators). ``--list`` and the test suite never touch this module's
 runtime path.
+
+Everything here is scoped to ONE adapter (``--adapter``, default
+``hci0``): the BlueZ object path, the centrals counted, the D-Bus
+signals subscribed to and every HCI command sent. Two processes on
+``hci0`` and ``hci1`` therefore form two independent BLE realms on one
+host — neither sees the other's centrals, and neither can silence or
+reprogram the other's advertising. (The GATT objects are exported on
+each process's own bus connection, so their identical object paths do
+not collide either — BlueZ keys applications by sender.)
 
 Must be run as root (sudo venv/bin/python main.py).
 """
@@ -26,6 +35,14 @@ from typing import Callable
 from dbus_fast.aio import MessageBus
 from dbus_fast import BusType, Message, MessageType, Variant
 
+from ble.adapter import (
+    DEFAULT_ADAPTER,
+    adapter_path,
+    device_path_prefix,
+    device_signal_match_rule,
+    hci_args,
+    normalize_adapter,
+)
 from ble.advertising import disable_extended_adv, set_extended_adv_data
 from ble.gatt import GattProfile, build_application
 
@@ -33,8 +50,10 @@ logger = logging.getLogger(__name__)
 
 # BlueZ D-Bus constants
 BLUEZ_SERVICE = "org.bluez"
-ADAPTER_PATH = "/org/bluez/hci0"
 GATT_MANAGER_IFACE = "org.bluez.GattManager1"
+# Path of the DEFAULT adapter — kept for callers that predate --adapter.
+# Anything adapter-aware derives its path with ble.adapter.adapter_path().
+ADAPTER_PATH = adapter_path(DEFAULT_ADAPTER)
 
 
 class BlueZUnavailableError(RuntimeError):
@@ -56,8 +75,9 @@ def should_advertise(link_count: int, multi_connect: bool) -> bool:
     return multi_connect or link_count == 0
 
 
-async def _async_preflight() -> None:
-    """Verify org.bluez is on the system bus and hci0 exists."""
+async def _async_preflight(adapter: str = DEFAULT_ADAPTER) -> None:
+    """Verify org.bluez is on the system bus and THIS adapter exists."""
+    wanted = adapter_path(adapter)
     try:
         bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
     except Exception as exc:
@@ -87,31 +107,34 @@ async def _async_preflight() -> None:
                 "(expected org.bluez.Adapter1 under /org/bluez) — this "
                 "machine has no usable Bluetooth hardware"
             )
-        if ADAPTER_PATH not in adapters:
+        if wanted not in adapters:
             raise BlueZUnavailableError(
-                f"no adapter at {ADAPTER_PATH} (found: {adapters}) — "
-                "the simulator currently drives hci0 only"
+                f"no adapter at {wanted} (found: {sorted(adapters)}) — "
+                "pass --adapter with one of those, or plug in the "
+                "controller this realm is meant to drive"
             )
     finally:
         bus.disconnect()
 
 
-def preflight_check() -> None:
+def preflight_check(adapter: str = DEFAULT_ADAPTER) -> None:
     """Raise :class:`BlueZUnavailableError` unless live BLE can work.
 
     Called synchronously from main BEFORE the peripheral thread starts,
-    so a machine without BlueZ/adapter aborts immediately with a clear
-    message instead of advertising into the void.
+    so a machine without BlueZ — or without the *requested* adapter —
+    aborts immediately with a clear message instead of advertising into
+    the void or, worse, quietly taking over another realm's controller.
     """
-    asyncio.run(_async_preflight())
+    asyncio.run(_async_preflight(adapter))
 
 
 class BLEPeripheral:
-    """BLE peripheral emulating one climbing board.
+    """BLE peripheral emulating one climbing board on one adapter.
 
     GATT shape and advertised service UUID come from the protocol
     family's :class:`GattProfile`; the advertised name carries the
-    board identity.
+    board identity; ``adapter`` decides which controller — and therefore
+    which BLE realm — all of it happens on.
     """
 
     def __init__(self, ble_name: str, profile: GattProfile,
@@ -119,7 +142,13 @@ class BLEPeripheral:
                  on_connect: Callable[[], None] | None = None,
                  on_disconnect: Callable[[], None] | None = None,
                  on_fatal: Callable[[BaseException], None] | None = None,
-                 multi_connect: bool = False) -> None:
+                 multi_connect: bool = False,
+                 adapter: str = DEFAULT_ADAPTER) -> None:
+        # Validate here rather than in the thread: a typo'd adapter is a
+        # startup error, not a mysterious dead peripheral 50 ms later.
+        self._adapter = normalize_adapter(adapter)
+        self._adapter_path = adapter_path(self._adapter)
+        self._device_prefix = device_path_prefix(self._adapter)
         self._ble_name = ble_name
         self._profile = profile
         self._on_data = on_data
@@ -155,6 +184,16 @@ class BLEPeripheral:
         self._adv_context: tuple | None = None
 
     @property
+    def adapter(self) -> str:
+        """The controller this peripheral drives, e.g. ``hci1``."""
+        return self._adapter
+
+    @property
+    def adapter_path(self) -> str:
+        """BlueZ object path of this peripheral's adapter."""
+        return self._adapter_path
+
+    @property
     def multi_connect(self) -> bool:
         return self._multi_connect
 
@@ -181,12 +220,23 @@ class BLEPeripheral:
                                             reason="mode change")
         else:
             async with self._adv_lock:
-                logger.info("Going quiet — exclusive mode with a client connected")
-                disable_extended_adv()
+                logger.info("[%s] Going quiet — exclusive mode with a client "
+                            "connected", self._adapter)
+                disable_extended_adv(self._adapter)
 
     def _handle_gatt_write(self, data: bytes) -> None:
         """Pass a GATT write through to the session decoder."""
         self._on_data(data)
+
+    def _owns_device_path(self, path: str) -> bool:
+        """Whether this D-Bus path is a central on THIS peripheral's adapter.
+
+        The single gate between two realms on one host: a Device1 under
+        another adapter's path belongs to the other simulator, and counting
+        it here would let its centrals drive this board's advertising and
+        connect/disconnect callbacks.
+        """
+        return path.startswith(self._device_prefix)
 
     async def _count_dbus_connections(self) -> int:
         """Number of centrals BlueZ reports as connected to this adapter.
@@ -195,6 +245,9 @@ class BLEPeripheral:
         which is deprecated and on current kernels prints no LE links at all.
         A silent "no links" from that tool used to read as a disconnect while
         a central was actively writing.
+
+        ObjectManager returns EVERY adapter's devices, so the per-adapter
+        filter is what keeps the count local to this realm.
         """
         if self._bus is None:
             return 0
@@ -210,7 +263,7 @@ class BLEPeripheral:
             managed = reply.body[0]
             return sum(
                 1 for path, ifaces in managed.items()
-                if path.startswith(ADAPTER_PATH + "/dev_")
+                if self._owns_device_path(path)
                 and ifaces.get("org.bluez.Device1", {}).get("Connected")
                 and ifaces["org.bluez.Device1"]["Connected"].value
             )
@@ -224,12 +277,18 @@ class BLEPeripheral:
         Kept as a THIRD opinion only. It cannot distinguish "no link" from
         "this tool does not report LE links on this kernel", so it may only
         ever add a link, never take one away.
+
+        ``-i`` matters as much here as it does for the advertising commands:
+        an unpinned ``hcitool con`` lists the FIRST controller's links, so
+        the second realm would mistake its neighbour's central for its own
+        and report a phantom connection.
         """
+        cmd = ["hcitool"] + hci_args(self._adapter) + ["con"]
         try:
             result = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: subprocess.run(
-                    ["hcitool", "con"], capture_output=True, text=True, timeout=3
+                    cmd, capture_output=True, text=True, timeout=3
                 )
             )
             return "< LE" in result.stdout
@@ -241,9 +300,11 @@ class BLEPeripheral:
         if self._running:
             return
         self._running = True
-        self._thread = threading.Thread(target=self._run_loop, daemon=True, name="ble-peripheral")
+        self._thread = threading.Thread(
+            target=self._run_loop, daemon=True,
+            name=f"ble-peripheral-{self._adapter}")
         self._thread.start()
-        logger.info("BLE peripheral thread started")
+        logger.info("[%s] BLE peripheral thread started", self._adapter)
 
     def stop(self) -> None:
         # Cooperative shutdown: _serve()'s poll loop checks self._running and
@@ -255,7 +316,7 @@ class BLEPeripheral:
         self._running = False
         if self._thread:
             self._thread.join(timeout=5.0)
-        logger.info("BLE peripheral stopped")
+        logger.info("[%s] BLE peripheral stopped", self._adapter)
 
     def _run_loop(self) -> None:
         self._loop = asyncio.new_event_loop()
@@ -273,8 +334,8 @@ class BLEPeripheral:
 
     async def _serve(self) -> None:
         board_name = self._ble_name
-        logger.info("Starting BLE server as '%s' (%s)",
-                    board_name, self._profile.description)
+        logger.info("[%s] Starting BLE server as '%s' (%s)",
+                    self._adapter, board_name, self._profile.description)
 
         if os.geteuid() != 0:
             logger.warning(
@@ -284,21 +345,27 @@ class BLEPeripheral:
         self._bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
 
         # -- Configure adapter -----------------------------------------
-        introspection = await self._bus.introspect(BLUEZ_SERVICE, ADAPTER_PATH)
-        adapter = self._bus.get_proxy_object(BLUEZ_SERVICE, ADAPTER_PATH, introspection)
+        # Every call below goes through THIS adapter's proxy, so a second
+        # simulator on another controller keeps its own power state, alias
+        # and discoverability.
+        introspection = await self._bus.introspect(
+            BLUEZ_SERVICE, self._adapter_path)
+        adapter = self._bus.get_proxy_object(
+            BLUEZ_SERVICE, self._adapter_path, introspection)
         adapter_props = adapter.get_interface("org.freedesktop.DBus.Properties")
 
         try:
             await adapter_props.call_set(
                 "org.bluez.Adapter1", "Powered", Variant("b", True))
-            logger.info("Adapter powered on")
+            logger.info("[%s] Adapter powered on", self._adapter)
         except Exception as e:
             logger.warning("Could not power on adapter: %s", e)
 
         try:
             await adapter_props.call_set(
                 "org.bluez.Adapter1", "Alias", Variant("s", board_name))
-            logger.info("Adapter alias set to '%s'", board_name)
+            logger.info("[%s] Adapter alias set to '%s'",
+                        self._adapter, board_name)
         except Exception as e:
             logger.warning("Could not set Adapter.Alias: %s", e)
 
@@ -335,20 +402,22 @@ class BLEPeripheral:
         # family's discovery UUID (Aurora: the 4488B571 discovery service;
         # MoonBoard: the Nordic UART Service itself).
         uuid = self._profile.advertised_uuid
-        if set_extended_adv_data(uuid, board_name):
-            logger.info("Service UUID injected into advertising data!")
+        if set_extended_adv_data(uuid, board_name, self._adapter):
+            logger.info("[%s] Service UUID injected into advertising data!",
+                        self._adapter)
         else:
             logger.warning(
                 "Could not inject UUID. Device visible as '%s' "
                 "but apps that filter on the UUID may not discover it.",
                 board_name)
 
-        logger.info("Advertising UUID: %s", uuid)
+        logger.info("[%s] Advertising UUID: %s", self._adapter, uuid)
         logger.info("Connection mode: %s",
                     "multi" if self._multi_connect else "single (exclusive)")
         # Lets set_multi_connect() act on a running peripheral.
         self._adv_context = (adapter_props, uuid, board_name)
-        logger.info("BLE peripheral ready — waiting for connections")
+        logger.info("[%s] BLE peripheral ready — waiting for connections",
+                    self._adapter)
 
         # -- Monitor connection state ----------------------------------
         # Every signal and every poll leads to the same question — how many
@@ -393,7 +462,8 @@ class BLEPeripheral:
                 _reconcile_link(self._connected or self._hci_link, source)
                 if not changed:
                     return
-                logger.info("%d central(s) connected (%s)", effective, source)
+                logger.info("[%s] %d central(s) connected (%s)",
+                            self._adapter, effective, source)
                 # A connection ends the advertisement that carried it (a legacy
                 # ADV_IND is consumed by the CONNECT_IND), and a peripheral can
                 # only be connected to WHILE it advertises. So in multi mode
@@ -412,7 +482,10 @@ class BLEPeripheral:
             if msg.member != "PropertiesChanged":
                 return
             path = msg.path or ""
-            if not path.startswith(ADAPTER_PATH + "/dev_"):
+            # The AddMatch below already narrows to this adapter, but the
+            # handler sees every signal delivered to the bus connection —
+            # so filter again rather than trust the daemon's routing.
+            if not self._owns_device_path(path):
                 return
 
             args = msg.body
@@ -431,22 +504,19 @@ class BLEPeripheral:
 
         self._bus.add_message_handler(_on_properties_changed)
 
-        # Subscribe to PropertiesChanged signals from BlueZ
+        # Subscribe to PropertiesChanged signals from BlueZ — narrowed to
+        # this adapter's path namespace, so the other realm's centrals are
+        # not even delivered here.
         await self._bus.call(Message(
             destination="org.freedesktop.DBus",
             path="/org/freedesktop/DBus",
             interface="org.freedesktop.DBus",
             member="AddMatch",
             signature="s",
-            body=[
-                "type='signal',"
-                "sender='org.bluez',"
-                "interface='org.freedesktop.DBus.Properties',"
-                "member='PropertiesChanged',"
-                f"path_namespace='{ADAPTER_PATH}'"
-            ],
+            body=[device_signal_match_rule(self._adapter)],
         ))
-        logger.info("D-Bus signal monitoring active (connect/disconnect)")
+        logger.info("[%s] D-Bus signal monitoring active (connect/disconnect)",
+                    self._adapter)
 
         # -- Keep running ----------------------------------------------
         try:
@@ -470,10 +540,15 @@ class BLEPeripheral:
             await self._unregister(gatt_mgr, app, adapter_props)
 
     async def _unregister(self, gatt_mgr, app, adapter_props) -> None:
-        """Best-effort GATT/advertising teardown, all on the serve loop."""
+        """Best-effort GATT/advertising teardown, all on the serve loop.
+
+        Every step targets this peripheral's own adapter, so tearing one
+        realm down — on shutdown or on a GUI board switch — leaves the
+        other realm advertising and connected.
+        """
         try:
             await gatt_mgr.call_unregister_application(app.path)  # type: ignore
-            logger.info("GATT application unregistered")
+            logger.info("[%s] GATT application unregistered", self._adapter)
         except Exception as exc:
             logger.debug("unregister_application failed: %s", exc)
         try:
@@ -481,6 +556,13 @@ class BLEPeripheral:
                 "org.bluez.Adapter1", "Discoverable", Variant("b", False))
         except Exception as exc:
             logger.debug("clearing Discoverable failed: %s", exc)
+        try:
+            # Stop the advertising set we programmed ourselves. Clearing
+            # Discoverable alone leaves the HCI set enabled, so the old
+            # board name kept being advertised after teardown.
+            disable_extended_adv(self._adapter)
+        except Exception as exc:
+            logger.debug("disabling advertising failed: %s", exc)
         try:
             self._bus.unexport(app.path)
             for svc in app.services:
@@ -497,16 +579,19 @@ class BLEPeripheral:
 
     async def _restart_advertising(self, adapter_props, uuid: str, name: str,
                                    reason: str = "") -> None:
-        """Put advertising back up so (further) clients can connect."""
+        """Put advertising back up on THIS adapter so (further) clients can
+        connect — the other realm's advertising set is untouched."""
         async with self._adv_lock:
-            logger.info("Restarting advertising (%s)...", reason or "link change")
+            logger.info("[%s] Restarting advertising (%s)...",
+                        self._adapter, reason or "link change")
             await asyncio.sleep(1.0)  # Give BlueZ time to clean up
 
             # Re-enable Discoverable (BlueZ may have turned it off)
             try:
                 await adapter_props.call_set(
                     "org.bluez.Adapter1", "Discoverable", Variant("b", True))
-                logger.info("Adapter.Discoverable re-enabled")
+                logger.info("[%s] Adapter.Discoverable re-enabled",
+                            self._adapter)
             except Exception as e:
                 logger.warning("Could not re-enable Discoverable: %s", e)
 
@@ -515,7 +600,8 @@ class BLEPeripheral:
             # Re-inject UUID into advertising data. On a controller that is out
             # of connection slots the enable command fails — that is a correct
             # refusal, not an error to work around.
-            if set_extended_adv_data(uuid, name):
-                logger.info("Advertising restarted with UUID")
+            if set_extended_adv_data(uuid, name, self._adapter):
+                logger.info("[%s] Advertising restarted with UUID",
+                            self._adapter)
             else:
                 logger.warning("Could not re-inject UUID into advertising")

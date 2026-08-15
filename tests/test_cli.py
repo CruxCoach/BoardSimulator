@@ -4,6 +4,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -54,6 +56,30 @@ class TestValidation:
         result = run_main("--board", "tension", "--layout", "tb9",
                           "--headless")
         assert result.returncode != 0
+
+
+class TestAdapterOption:
+    """--adapter picks the controller — and therefore the BLE realm."""
+
+    def test_help_documents_the_default_and_multi_adapter_use(self) -> None:
+        out = run_main("--help").stdout
+        assert "--adapter" in out
+        assert "hci1" in out
+
+    def test_second_adapter_is_accepted(self) -> None:
+        # --list exits before any BlueZ work, so this passes on a box with
+        # no hci1 (or no Bluetooth at all).
+        result = run_main("--adapter", "hci1", "--list")
+        assert result.returncode == 0
+
+    @pytest.mark.parametrize("value", ["wlan0", "hci", "", "hci0/dev_AA"])
+    def test_a_name_that_is_not_a_controller_is_a_usage_error(
+            self, value: str) -> None:
+        # Exit 2 (usage), not 1 (no Bluetooth): a typo must not look like
+        # missing hardware.
+        result = run_main("--adapter", value, "--list")
+        assert result.returncode == 2
+        assert "adapter" in result.stderr.lower()
 
 
 class TestFailFastWithoutBluetooth:

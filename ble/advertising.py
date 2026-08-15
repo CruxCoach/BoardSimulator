@@ -9,12 +9,19 @@ Advertising PDUs that phone apps don't scan for.
 Solution: after BlueZ has started advertising (Adapter.Discoverable),
 stop advertising -> set parameters (with legacy PDU) -> set data ->
 set scan response -> restart advertising — all via raw HCI commands.
+
+Every command is pinned to ONE controller with ``-i hciN``: an unpinned
+hcitool talks to the first adapter it finds, so on a two-adapter host
+the second simulator would happily overwrite the first board's
+advertising set and take its identity over.
 """
 
 from __future__ import annotations
 
 import logging
 import subprocess
+
+from ble.adapter import DEFAULT_ADAPTER, hci_args
 
 logger = logging.getLogger(__name__)
 
@@ -95,28 +102,31 @@ def _hci_status_name(status: int) -> str:
 # Extended Advertising via hcitool
 # ---------------------------------------------------------------------------
 
-def _hcitool_cmd(label: str, ogf_ocf: str, params: list[str]) -> bool:
-    """Send a single hcitool command and check HCI status."""
-    cmd = ["hcitool", "cmd"] + ogf_ocf.split() + params
+def _hcitool_cmd(label: str, ogf_ocf: str, params: list[str],
+                 adapter: str = DEFAULT_ADAPTER) -> bool:
+    """Send a single hcitool command to one adapter and check HCI status."""
+    cmd = ["hcitool"] + hci_args(adapter) + ["cmd"] + ogf_ocf.split() + params
 
     logger.debug("hcitool %s: %s", label, " ".join(cmd))
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
         if result.returncode != 0:
-            logger.warning("hcitool %s failed (rc=%d): %s",
-                           label, result.returncode, result.stderr.strip())
+            logger.warning("[%s] hcitool %s failed (rc=%d): %s",
+                           adapter, label, result.returncode,
+                           result.stderr.strip())
             return False
 
         output = result.stdout.strip()
         hci_status = _parse_hci_status(output)
         if hci_status is not None and hci_status != 0:
-            logger.warning("hcitool %s: HCI status 0x%02x (%s)",
-                           label, hci_status, _hci_status_name(hci_status))
+            logger.warning("[%s] hcitool %s: HCI status 0x%02x (%s)",
+                           adapter, label, hci_status,
+                           _hci_status_name(hci_status))
             if output:
                 logger.debug("hcitool output: %s", output)
             return False
 
-        logger.info("hcitool %s: OK", label)
+        logger.info("[%s] hcitool %s: OK", adapter, label)
         if output:
             logger.debug("hcitool output: %s", output)
         return True
@@ -125,16 +135,17 @@ def _hcitool_cmd(label: str, ogf_ocf: str, params: list[str]) -> bool:
         logger.warning("hcitool not found")
         return False
     except subprocess.TimeoutExpired:
-        logger.warning("hcitool %s timed out", label)
+        logger.warning("[%s] hcitool %s timed out", adapter, label)
         return False
 
 
-def disable_extended_adv() -> bool:
-    """Stop advertising on handle 0x00.
+def disable_extended_adv(adapter: str = DEFAULT_ADAPTER) -> bool:
+    """Stop advertising on handle 0x00 of ONE adapter.
 
     Used to emulate an exclusive controller: a peripheral can only be
     connected to WHILE it advertises, so switching off the advertisement is
-    what makes a board look "one client at a time" to everyone else.
+    what makes a board look "one client at a time" to everyone else. The
+    adapter argument keeps that silence local to its own realm.
     """
     return _hcitool_cmd("ext adv disable", "0x08 0x0039", [
         "00",              # Enable: disabled
@@ -142,10 +153,11 @@ def disable_extended_adv() -> bool:
         "00",              # Handle: 0x00
         "00", "00",        # Duration: 0 (no limit)
         "00",              # Max_Events: 0 (no limit)
-    ])
+    ], adapter=adapter)
 
 
-def set_extended_adv_data(uuid_str: str, name: str) -> bool:
+def set_extended_adv_data(uuid_str: str, name: str,
+                          adapter: str = DEFAULT_ADAPTER) -> bool:
     """Set up Extended Advertising with legacy PDU on handle 0x00.
 
     Sequence:
@@ -158,7 +170,8 @@ def set_extended_adv_data(uuid_str: str, name: str) -> bool:
     adv_data = build_adv_data(uuid_str)
     scan_rsp = build_scan_response(name)
 
-    logger.info("Configuring Extended Advertising with legacy PDU (handle 0x00)")
+    logger.info("[%s] Configuring Extended Advertising with legacy PDU "
+                "(handle 0x00)", adapter)
     logger.info("  Adv data (%d bytes): %s", len(adv_data), adv_data.hex(" "))
     logger.info("  Scan rsp (%d bytes): %s", len(scan_rsp), scan_rsp.hex(" "))
 
@@ -169,10 +182,10 @@ def set_extended_adv_data(uuid_str: str, name: str) -> bool:
         "00",              # Handle: 0x00
         "00", "00",        # Duration: 0 (no limit)
         "00",              # Max_Events: 0 (no limit)
-    ])
+    ], adapter=adapter)
     if not disable_ok:
         logger.warning("Could not disable advertising, trying data-only approach")
-        return _set_extended_adv_data_only(adv_data, scan_rsp)
+        return _set_extended_adv_data_only(adv_data, scan_rsp, adapter=adapter)
 
     # Step 2: Set advertising parameters with legacy PDU flag
     params_ok = _hcitool_cmd("ext adv params", "0x08 0x0036", [
@@ -191,7 +204,7 @@ def set_extended_adv_data(uuid_str: str, name: str) -> bool:
         "01",              # Secondary PHY: LE 1M
         "00",              # Advertising SID: 0
         "00",              # Scan request notification: Disabled
-    ])
+    ], adapter=adapter)
     if not params_ok:
         logger.warning("Could not set advertising parameters")
 
@@ -201,7 +214,7 @@ def set_extended_adv_data(uuid_str: str, name: str) -> bool:
         "03",                                          # Operation: Complete
         "01",                                          # Fragment pref: minimize
         f"{len(adv_data):02x}",                       # Data length
-    ] + [f"{b:02x}" for b in adv_data])
+    ] + [f"{b:02x}" for b in adv_data], adapter=adapter)
 
     # Step 4: Set scan response data (device name)
     scan_ok = _hcitool_cmd("ext scan rsp", "0x08 0x0038", [
@@ -209,7 +222,7 @@ def set_extended_adv_data(uuid_str: str, name: str) -> bool:
         "03",                                          # Operation: Complete
         "01",                                          # Fragment pref: minimize
         f"{len(scan_rsp):02x}",                       # Data length
-    ] + [f"{b:02x}" for b in scan_rsp])
+    ] + [f"{b:02x}" for b in scan_rsp], adapter=adapter)
 
     # Step 5: Re-enable advertising on handle 0x00
     enable_ok = _hcitool_cmd("ext adv enable", "0x08 0x0039", [
@@ -218,10 +231,11 @@ def set_extended_adv_data(uuid_str: str, name: str) -> bool:
         "00",              # Handle: 0x00
         "00", "00",        # Duration: 0 (no limit)
         "00",              # Max_Events: 0 (no limit)
-    ])
+    ], adapter=adapter)
 
     if params_ok and adv_ok and scan_ok and enable_ok:
-        logger.info("Full Extended Advertising setup complete (legacy ADV_IND)")
+        logger.info("[%s] Full Extended Advertising setup complete "
+                    "(legacy ADV_IND)", adapter)
         return True
 
     if enable_ok and adv_ok:
@@ -231,19 +245,21 @@ def set_extended_adv_data(uuid_str: str, name: str) -> bool:
     return False
 
 
-def _set_extended_adv_data_only(adv_data: bytes, scan_rsp: bytes) -> bool:
+def _set_extended_adv_data_only(adv_data: bytes, scan_rsp: bytes,
+                                adapter: str = DEFAULT_ADAPTER) -> bool:
     """Fallback: overwrite advertising data without stopping/restarting.
 
     Used when we can't disable advertising (e.g. no active handle).
     """
-    logger.info("Fallback: overwriting advertising data only (no param change)")
+    logger.info("[%s] Fallback: overwriting advertising data only "
+                "(no param change)", adapter)
 
     adv_ok = _hcitool_cmd("ext adv data", "0x08 0x0037", [
         "00", "03", "01", f"{len(adv_data):02x}",
-    ] + [f"{b:02x}" for b in adv_data])
+    ] + [f"{b:02x}" for b in adv_data], adapter=adapter)
 
     scan_ok = _hcitool_cmd("ext scan rsp", "0x08 0x0038", [
         "00", "03", "01", f"{len(scan_rsp):02x}",
-    ] + [f"{b:02x}" for b in scan_rsp])
+    ] + [f"{b:02x}" for b in scan_rsp], adapter=adapter)
 
     return adv_ok and scan_ok
