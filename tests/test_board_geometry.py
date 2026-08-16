@@ -5,6 +5,8 @@ against the official per-brand board databases (brand-app APK extracts),
 cross-checked with CruxCoach 0.2.0's BoardConstants where applicable.
 """
 
+from pathlib import Path
+
 import pytest
 
 from board_geometry import BoardGeometry, list_sizes
@@ -16,6 +18,12 @@ def geometry(board_key: str, layout_key: str | None = None,
     board = board_for(board_key)
     variant = board.variant_for(layout_key)
     return BoardGeometry(board, variant, size_id or variant.default_size_id)
+
+
+def test_bundled_kilter_images_cover_original_and_homewall() -> None:
+    assets = Path(board_for("kilter").assets_dir)
+    assert (assets / "board_10.webp").is_file()
+    assert (assets / "board_21.webp").is_file()
 
 
 # --- LED maps per board (counts from the official DBs) ---

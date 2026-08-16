@@ -54,6 +54,13 @@ class BoardBar:
         self._on_connections = on_connections
         self._on_instances = on_instances
         self._frame = tk.Frame(parent, bg=BAR_BG)
+        # Mode controls get their own first row.  Aurora panels can be only
+        # ~700 px wide, and a single row containing Board + Layout + Size +
+        # Connections used to clip the all-important 1/2-board selector.
+        self._mode_row = tk.Frame(self._frame, bg=BAR_BG)
+        self._mode_row.pack(fill=tk.X)
+        self._selection_row = tk.Frame(self._frame, bg=BAR_BG)
+        self._selection_row.pack(fill=tk.X)
 
         self._board_to_key = {dn: k for k, dn in sel.board_choices()}
         self._layout_to_key = {
@@ -63,20 +70,29 @@ class BoardBar:
             in sel.size_choices(current.board_key, current.layout_key)}
 
         self._board_var = self._add_combo(
-            "Board", list(self._board_to_key),
+            self._selection_row, "Board", list(self._board_to_key),
             self._display_for(self._board_to_key, current.board_key),
-            self._on_board)
+            self._on_board, width=15)
         self._layout_var = self._add_combo(
-            "Layout", list(self._layout_to_key),
+            self._selection_row, "Layout", list(self._layout_to_key),
             self._display_for(self._layout_to_key, current.layout_key),
-            self._on_layout, width=24)
+            self._on_layout, width=20)
         self._size_var = None
         if self._size_to_id:
             self._size_var = self._add_combo(
-                "Size", list(self._size_to_id),
+                self._selection_row, "Size", list(self._size_to_id),
                 self._display_for(self._size_to_id,
                                   sel.effective_size_id(current)),
-                self._on_size, width=22)
+                self._on_size, width=18)
+
+        # Put Simulation first: it is the primary mode switch and must remain
+        # visible even on the narrowest board panel.
+        self._instances_var = None
+        if self._on_instances is not None:
+            self._instances_var = self._add_combo(
+                self._mode_row, "Simulation", list(INSTANCE_CHOICES),
+                INSTANCE_CHOICES[instance_count - 1],
+                self._on_instances_pick, width=9)
 
         # Connection character. Unlike the three above this changes nothing
         # about the board — it only decides whether the controller keeps
@@ -86,16 +102,9 @@ class BoardBar:
         self._connections_var = None
         if self._on_connections is not None:
             self._connections_var = self._add_combo(
-                "Connections", list(CONNECTION_CHOICES),
+                self._mode_row, "Connections", list(CONNECTION_CHOICES),
                 CONNECTION_MULTI if multi_connect else CONNECTION_SINGLE,
                 self._on_connections_pick, width=8)
-
-        self._instances_var = None
-        if self._on_instances is not None:
-            self._instances_var = self._add_combo(
-                "Simulation", list(INSTANCE_CHOICES),
-                INSTANCE_CHOICES[instance_count - 1],
-                self._on_instances_pick, width=9)
 
     def pack(self, **kwargs) -> "BoardBar":
         self._frame.pack(**kwargs)
@@ -110,12 +119,12 @@ class BoardBar:
                 return display
         return next(iter(mapping), "")
 
-    def _add_combo(self, label: str, values: list[str], current: str,
+    def _add_combo(self, row: tk.Misc, label: str, values: list[str], current: str,
                    handler: Callable, width: int = 18) -> tk.StringVar:
-        tk.Label(self._frame, text=f"{label}:", bg=BAR_BG, fg=LABEL_FG,
+        tk.Label(row, text=f"{label}:", bg=BAR_BG, fg=LABEL_FG,
                  font=LABEL_FONT).pack(side=tk.LEFT, padx=(10, 2), pady=6)
         var = tk.StringVar(value=current)
-        combo = ttk.Combobox(self._frame, textvariable=var, values=values,
+        combo = ttk.Combobox(row, textvariable=var, values=values,
                              state="readonly", width=width)
         combo.pack(side=tk.LEFT, padx=(0, 4))
         combo.bind("<<ComboboxSelected>>", handler)
