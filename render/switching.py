@@ -30,6 +30,7 @@ LABEL_FONT = ("Helvetica", 9)
 CONNECTION_SINGLE = "single"
 CONNECTION_MULTI = "multi"
 CONNECTION_CHOICES = (CONNECTION_SINGLE, CONNECTION_MULTI)
+INSTANCE_CHOICES = ("1 board", "2 boards")
 
 
 class BoardBar:
@@ -45,10 +46,13 @@ class BoardBar:
     def __init__(self, parent: tk.Misc, current: Selection,
                  on_switch: Callable[[Selection], None],
                  multi_connect: bool = False,
-                 on_connections: Callable[[bool], None] | None = None) -> None:
+                 on_connections: Callable[[bool], None] | None = None,
+                 instance_count: int = 1,
+                 on_instances: Callable[[int], None] | None = None) -> None:
         self._current = current
         self._on_switch = on_switch
         self._on_connections = on_connections
+        self._on_instances = on_instances
         self._frame = tk.Frame(parent, bg=BAR_BG)
 
         self._board_to_key = {dn: k for k, dn in sel.board_choices()}
@@ -86,6 +90,13 @@ class BoardBar:
                 CONNECTION_MULTI if multi_connect else CONNECTION_SINGLE,
                 self._on_connections_pick, width=8)
 
+        self._instances_var = None
+        if self._on_instances is not None:
+            self._instances_var = self._add_combo(
+                "Simulation", list(INSTANCE_CHOICES),
+                INSTANCE_CHOICES[instance_count - 1],
+                self._on_instances_pick, width=9)
+
     def pack(self, **kwargs) -> "BoardBar":
         self._frame.pack(**kwargs)
         return self
@@ -114,6 +125,11 @@ class BoardBar:
         if self._on_connections is None or self._connections_var is None:
             return
         self._on_connections(self._connections_var.get() == CONNECTION_MULTI)
+
+    def _on_instances_pick(self, _event=None) -> None:
+        if self._on_instances is None or self._instances_var is None:
+            return
+        self._on_instances(2 if self._instances_var.get() == "2 boards" else 1)
 
     def _on_board(self, _event=None) -> None:
         key = self._board_to_key.get(self._board_var.get())

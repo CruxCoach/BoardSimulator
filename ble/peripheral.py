@@ -224,7 +224,7 @@ class BLEPeripheral:
                             "connected", self._adapter)
                 disable_extended_adv(self._adapter)
 
-    def _handle_gatt_write(self, data: bytes) -> None:
+    def _handle_gatt_write(self, data: bytes, device: str | None = None) -> None:
         """Pass a GATT write through to the session decoder."""
         self._on_data(data)
 

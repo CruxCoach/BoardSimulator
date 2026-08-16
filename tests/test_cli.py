@@ -6,6 +6,8 @@ import sys
 
 import pytest
 
+from main import _next_serial
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -43,6 +45,31 @@ class TestList:
 
 
 class TestValidation:
+    @pytest.mark.parametrize(("first", "second"), [
+        ("0001", "0002"), ("a001", "a002"), ("board", "board2"),
+    ])
+    def test_second_serial_is_distinct_and_scanner_friendly(
+            self, first: str, second: str) -> None:
+        assert _next_serial(first) == second
+
+    def test_one_board_is_the_documented_default(self) -> None:
+        out = run_main("--help").stdout
+        assert "--instances" in out
+        assert "default: 1" in out
+
+    def test_two_board_options_parse_without_bluetooth(self) -> None:
+        result = run_main(
+            "--instances", "2", "--second-board", "tension",
+            "--second-layout", "tb2", "--second-serial", "b002", "--list")
+        assert result.returncode == 0
+
+    def test_two_aurora_realms_reject_the_same_serial(self) -> None:
+        result = run_main(
+            "--instances", "2", "--serial", "same",
+            "--second-serial", "same", "--headless")
+        assert result.returncode == 2
+        assert "distinct --second-serial" in result.stderr
+
     def test_unknown_board_rejected_by_argparse(self) -> None:
         result = run_main("--board", "spire", "--list")
         assert result.returncode == 2

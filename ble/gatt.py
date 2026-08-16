@@ -75,7 +75,7 @@ class GattCharacteristic(ServiceInterface):
         self._flags = flags
         self._service_path = service_path
         self._value = bytearray()
-        self.write_callback: Callable[[bytes], None] | None = None
+        self.write_callback: Callable[[bytes, str | None], None] | None = None
         super().__init__("org.bluez.GattCharacteristic1")
 
     @dbus_property(access=PropertyAccess.READ)
@@ -98,7 +98,9 @@ class GattCharacteristic(ServiceInterface):
     def WriteValue(self, value: "ay", options: "a{sv}") -> None:  # type: ignore  # noqa: N802
         self._value = bytearray(value)
         if self.write_callback:
-            self.write_callback(bytes(value))
+            device_option = options.get("device")
+            device = getattr(device_option, "value", device_option)
+            self.write_callback(bytes(value), str(device) if device else None)
 
     @method()
     def StartNotify(self) -> None:  # type: ignore  # noqa: N802
@@ -163,7 +165,7 @@ class GattApplication(ServiceInterface):
 
 
 def build_application(profile: GattProfile,
-                      on_data: Callable[[bytes], None]) -> GattApplication:
+                      on_data: Callable[[bytes, str | None], None]) -> GattApplication:
     """Instantiate the D-Bus GATT object tree for a profile.
 
     The write callback is attached to every characteristic marked
@@ -180,3 +182,35 @@ def build_application(profile: GattProfile,
             service.characteristics.append(char)
         app.services.append(service)
     return app
+
+
+def merge_profiles(profiles: list[GattProfile]) -> GattProfile:
+    """Return one GATT database containing the union of several profiles."""
+    if not profiles:
+        raise ValueError("at least one GATT profile is required")
+    if all(profile == profiles[0] for profile in profiles[1:]):
+        return profiles[0]
+
+    services: dict[str, dict[str, CharacteristicSpec]] = {}
+    for profile in profiles:
+        for service in profile.services:
+            chars = services.setdefault(service.uuid, {})
+            for char in service.characteristics:
+                previous = chars.get(char.uuid)
+                if previous is None:
+                    chars[char.uuid] = char
+                else:
+                    chars[char.uuid] = CharacteristicSpec(
+                        uuid=char.uuid,
+                        flags=tuple(dict.fromkeys(previous.flags + char.flags)),
+                        receives_writes=(previous.receives_writes
+                                         or char.receives_writes),
+                    )
+    return GattProfile(
+        description=" + ".join(dict.fromkeys(p.description for p in profiles)),
+        advertised_uuid=profiles[0].advertised_uuid,
+        services=tuple(
+            ServiceSpec(uuid, tuple(chars.values()))
+            for uuid, chars in services.items()
+        ),
+    )

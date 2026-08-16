@@ -104,6 +104,8 @@ class MoonBoardGUI:
         on_switch: Callable[[Selection], None] | None = None,
         multi_connect: bool = False,
         on_connections: Callable[[bool], None] | None = None,
+        instance_count: int = 1,
+        on_instances: Callable[[int], None] | None = None,
     ) -> None:
         self._parent = parent
         self._board = board
@@ -138,7 +140,9 @@ class MoonBoardGUI:
         if selection is not None and on_switch is not None:
             BoardBar(parent, selection, on_switch,
                      multi_connect=multi_connect,
-                     on_connections=on_connections).pack(
+                     on_connections=on_connections,
+                     instance_count=instance_count,
+                     on_instances=on_instances).pack(
                 fill=tk.X, side=tk.TOP, pady=(6, 0))
 
         self._canvas = tk.Canvas(

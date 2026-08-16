@@ -24,10 +24,9 @@ as an ASCII grid on stdout.
 
 - **Python** 3.10+
 - **Linux** with BlueZ
-- **Bluetooth adapter** with BLE support (only for live BLE;
-  `--list` and the tests run without one) — one adapter per simulated
-  board, so two boards at once need two adapters (see
-  [Two boards at once](#two-boards-at-once-two-adapters-two-realms))
+- **Bluetooth adapter** with BLE peripheral and Extended Advertising support
+  (only for live BLE; `--list` and the tests run without one). One adapter can
+  simulate one board normally or two virtual boards in multiplex mode.
 - **System packages:**
   ```bash
   sudo apt install bluez bluetooth python3-tk
@@ -85,6 +84,9 @@ sudo venv/bin/python main.py --board kilter
 # Kilter Homewall 10x10
 sudo venv/bin/python main.py --board kilter --layout homewall
 
+# Two distinct Kilter realms on the same built-in controller
+sudo venv/bin/python main.py --board kilter --layout homewall --instances 2
+
 # Tension Board 2 (Mirror), 12x12
 sudo venv/bin/python main.py --board tension --layout tb2
 
@@ -105,6 +107,11 @@ python main.py --list
 | `--size` | layout default | Aurora `product_size_id` (see `--list`) — Aurora boards only |
 | `--api-level` | `3` | Aurora protocol version (`2` or `3`), suffix `@N` in the BLE name — Aurora boards only |
 | `--serial` | `0001` | Serial number, suffix `#serial` in the BLE name — Aurora boards only |
+| `--instances` | `1` | Simulate one or two virtual boards on the selected adapter |
+| `--second-board` | same as board 1 | Initial board for slot 2 |
+| `--second-layout` | same/default | Initial layout for slot 2 |
+| `--second-size` | layout default | Initial Aurora size for slot 2 |
+| `--second-serial` | incremented | Distinct Aurora serial for slot 2 |
 | `--adapter` | `hci0` | Bluetooth controller to drive (`hci0`, `hci1`, … — see `hciconfig`) |
 | `--headless` | off | ASCII grid on stdout instead of GUI (also: `BOARDSIM_HEADLESS=1`) |
 
@@ -121,55 +128,38 @@ After starting:
    role colors (Kilter e.g. middle=cyan/finish=magenta, So iLL
    middle=magenta/finish=white/foot=cyan)
 
-### Two boards at once (two adapters, two realms)
+### Two boards at once (one adapter, two realms)
 
-One process simulates one board on one controller — and **a controller
-can only be one peripheral at a time**: it has a single advertised
-identity, a single advertising set and a single GATT database. So two
-simulated boards on the same host require **two Bluetooth adapters**
-(e.g. the built-in one plus a USB BLE dongle); there is no way to split
-one adapter between two boards.
-
-Given two adapters, each process gets its own **BLE realm**. Two Kilter
-boards, in two terminals:
+Choose **Simulation → 2 boards** in the GUI, or start directly with:
 
 ```bash
-# Realm A — Kilter Original on the built-in controller
-sudo venv/bin/python main.py --board kilter --adapter hci0 --serial a001
-
-# Realm B — Kilter Homewall on a second (USB) controller
 sudo venv/bin/python main.py --board kilter --layout homewall \
-    --adapter hci1 --serial b002
+    --instances 2 --serial a001 --second-serial b002
 ```
 
-They advertise as `Kilter Board#a001@3` and `Kilter Board#b002@3` — the
-serial is what lets you tell the two realms apart in the scan list of
-the app or CruxCoach, so give each instance its own (alphanumeric,
-matching the apps' `#[a-z0-9]+` parsing). `hciconfig` lists the adapter
-names available on the host.
+The simulator alternates one connectable advertising set between two stable
+random BLE addresses. Once a phone connects to one identity, that link stays
+up while the other board is advertised. Incoming GATT writes contain the
+remote device path and are routed permanently to the corresponding board
+decoder and GUI tab. In the default `single` connection mode, a connected
+slot is no longer advertised; the other slot remains available.
 
-Everything that could leak between the two is scoped to `--adapter`:
-the BlueZ object path (`/org/bluez/hci1`), the connected-central count,
-the D-Bus signal subscription (`path_namespace`) and every `hcitool`
-call — both `hcitool -i hciX con` and the raw `hcitool -i hciX cmd …`
-advertising commands. Consequently:
+Both slots initially use the selected board/layout. Aurora serials default to
+`0001` and `0002`; each tab has its own Board/Layout/Size controls. Changing
+the simulation count or either board rebuilds BLE and disconnects existing
+clients. The two identities are time-multiplexed, so a scan can take several
+seconds to show both. Controller firmware still determines how many parallel
+LE links it can maintain.
 
-- a phone connecting to realm A does not change realm B's connection
-  state or clear its board;
-- realm A restarting or disabling its advertising leaves realm B
-  advertising;
-- stopping (or switching the board in) realm A does not touch realm B —
-  its GATT application, advertising set and D-Bus connection are its own;
-- a `--adapter` that is not present aborts at startup (fail-fast
-  preflight) instead of quietly grabbing the other realm's controller.
-
-Board switching in the GUI (below) stays inside the realm it was started
-with: a pick changes the board, never the adapter.
+The existing two-adapter setup remains available: run one process per adapter
+with `--adapter hci0` and `--adapter hci1` when maximal hardware isolation is
+desired.
 
 ### Switching boards at runtime
 
 Each GUI has a **board bar** at the top with dropdowns for **Board**,
-**Layout** and (for Aurora boards) **Size**. A selection switches the
+**Layout**, (for Aurora boards) **Size**, connection behavior, and
+**Simulation** (`1 board` / `2 boards`). A selection switches the
 simulated board live — the process keeps running, and the window and BLE
 peripheral are cleanly rebuilt for the new board (this also covers a
 switch between the Aurora ↔ MoonBoard protocol families, since the BLE
@@ -212,6 +202,7 @@ protocols/
 ble/
   adapter.py            Adapter name → D-Bus path, match rule, hcitool -i
   peripheral.py         BlueZ D-Bus peripheral + fail-fast preflight
+  multiplex.py          Two stable virtual identities on one controller
   gatt.py               GATT profile → D-Bus objects
   advertising.py        Extended-Advertising HCI helpers
 render/                 GUI + headless per family

@@ -1,10 +1,8 @@
-"""Which Bluetooth controller one simulator instance drives.
+"""Which Bluetooth controller one simulator process drives.
 
-A process still simulates exactly ONE board, but a host with several
-controllers can run several of them side by side: one board per adapter,
-each its own BLE realm with its own advertised identity, its own GATT
-database and its own centrals. Nothing is shared between two such
-processes except the machine.
+A process normally simulates one board and can optionally multiplex two
+virtual identities on that controller. Hosts with several controllers may
+still run several processes side by side for fully hardware-isolated realms.
 
 Every per-adapter detail is derived from the name held here — the BlueZ
 object path (``/org/bluez/hci1``), the device-path prefix used to count

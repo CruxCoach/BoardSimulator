@@ -156,6 +156,75 @@ def disable_extended_adv(adapter: str = DEFAULT_ADAPTER) -> bool:
     ], adapter=adapter)
 
 
+def static_random_address(seed: str) -> bytes:
+    """Return a stable BLE static-random address for one virtual identity.
+
+    HCI carries addresses least-significant octet first.  The two most
+    significant bits therefore live in the final byte and must both be set
+    for a static-random address.  A local digest keeps identities stable
+    across simulator restarts without storing machine-specific state.
+    """
+    import hashlib
+
+    address = bytearray(hashlib.sha256(seed.encode("utf-8")).digest()[:6])
+    address[5] = (address[5] & 0x3f) | 0xc0
+    return bytes(address)
+
+
+def set_virtual_adv_data(uuid_str: str, name: str, random_address: bytes,
+                         adapter: str = DEFAULT_ADAPTER) -> bool:
+    """Program handle 0 as one connectable virtual board identity.
+
+    This deliberately reuses a single advertising set.  The caller may
+    rotate it between identities while already-established LE connections
+    stay alive, which lets one physical controller represent two boards.
+    """
+    if len(random_address) != 6 or random_address[5] & 0xc0 != 0xc0:
+        raise ValueError("random_address must be a 6-byte static BLE address")
+
+    adv_data = build_adv_data(uuid_str)
+    scan_rsp = build_scan_response(name)
+    if len(scan_rsp) > 31:
+        raise ValueError(f"BLE name is too long for a legacy scan response: {name!r}")
+
+    disable_ok = disable_extended_adv(adapter)
+    address_ok = _hcitool_cmd("ext adv random address", "0x08 0x0035", [
+        "00",  # Advertising_Handle
+    ] + [f"{octet:02x}" for octet in random_address], adapter=adapter)
+    params_ok = _hcitool_cmd("ext adv params", "0x08 0x0036", [
+        "00",              # Advertising_Handle
+        "13", "00",        # Connectable + scannable + legacy ADV_IND
+        "a0", "00", "00",  # Min interval: 100 ms
+        "00", "01", "00",  # Max interval: 160 ms
+        "07",              # All primary channels
+        "01",              # Own address type: Random
+        "00",              # Peer address type: Public
+        "00", "00", "00", "00", "00", "00",
+        "00",              # Allow all
+        "7f",              # No TX-power preference
+        "01", "00", "01",  # Primary PHY, skip, secondary PHY
+        "00", "00",        # SID, scan-request notification
+    ], adapter=adapter)
+    adv_ok = _hcitool_cmd("ext adv data", "0x08 0x0037", [
+        "00", "03", "01", f"{len(adv_data):02x}",
+    ] + [f"{octet:02x}" for octet in adv_data], adapter=adapter)
+    scan_ok = _hcitool_cmd("ext scan rsp", "0x08 0x0038", [
+        "00", "03", "01", f"{len(scan_rsp):02x}",
+    ] + [f"{octet:02x}" for octet in scan_rsp], adapter=adapter)
+    enable_ok = _hcitool_cmd("ext adv enable", "0x08 0x0039", [
+        "01", "01", "00", "00", "00", "00",
+    ], adapter=adapter)
+
+    ok = disable_ok and address_ok and params_ok and adv_ok and scan_ok and enable_ok
+    if ok:
+        shown = ":".join(f"{octet:02X}" for octet in reversed(random_address))
+        logger.info("[%s] Virtual identity '%s' advertising as %s",
+                    adapter, name, shown)
+    else:
+        logger.warning("[%s] Could not program virtual identity '%s'", adapter, name)
+    return ok
+
+
 def set_extended_adv_data(uuid_str: str, name: str,
                           adapter: str = DEFAULT_ADAPTER) -> bool:
     """Set up Extended Advertising with legacy PDU on handle 0x00.
