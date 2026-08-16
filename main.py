@@ -14,7 +14,8 @@ Usage:
     python main.py --list        # show boards, layouts and sizes (no BLE)
 
 The default is one board.  ``--instances 2`` (or the GUI's Simulation
-selector) time-multiplexes two stable BLE identities on one adapter.
+selector) exposes two simultaneous hardware advertising identities on one
+capable adapter.
 """
 
 import argparse
@@ -105,9 +106,8 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--instances", type=int, choices=(1, 2), default=1,
-        help="Number of virtual boards on this adapter. Two-board mode "
-             "rotates two BLE identities on one controller and is also "
-             "switchable at runtime in the GUI (default: %(default)s).",
+        help="Virtual boards on this adapter; two use simultaneous hardware "
+             "advertising (default: %(default)s).",
     )
     parser.add_argument(
         "--second-board", choices=list(BOARDS), default=None,

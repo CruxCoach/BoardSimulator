@@ -1,5 +1,7 @@
 """Hardware-independent contract for two boards on one BLE adapter."""
 
+import subprocess
+
 from dbus_fast import Variant
 
 from ble import advertising
@@ -57,6 +59,42 @@ def test_virtual_advertising_programs_random_identity(monkeypatch) -> None:
     assert {adapter for _, _, adapter in calls} == {"hci1"}
 
 
+def test_two_hardware_sets_are_configured_and_enabled(monkeypatch) -> None:
+    calls: list[tuple[str, list[str], str]] = []
+    monkeypatch.setattr(advertising, "_hcitool_cmd",
+                        lambda label, opcode, params, adapter="hci0":
+                        calls.append((opcode, params, adapter)) or True)
+
+    address = advertising.static_random_address("board-a")
+    assert advertising.configure_hardware_adv_set(
+        "00000000-0000-0000-0000-000000000001",
+        "Kilter Board#a001@3", address, 2, "hci1")
+    assert advertising.set_adv_sets_enabled([1, 2], True, "hci1")
+
+    assert [opcode for opcode, _, _ in calls] == [
+        "0x08 0x0035", "0x08 0x0036", "0x08 0x0037",
+        "0x08 0x0038", "0x08 0x0039",
+    ]
+    assert calls[0][1] == ["02"] + [f"{octet:02x}" for octet in address]
+    assert calls[1][1][0] == "02"
+    assert calls[-1][1] == [
+        "01", "02", "01", "00", "00", "00",
+        "02", "00", "00", "00",
+    ]
+    assert {adapter for _, _, adapter in calls} == {"hci1"}
+
+
+def test_supported_advertising_set_count_is_parsed(monkeypatch) -> None:
+    output = """< HCI Command: ogf 0x08, ocf 0x003b, plen 0
+> HCI Event: 0x0e plen 5
+  01 3B 20 00 14
+"""
+    monkeypatch.setattr(advertising.subprocess, "run", lambda *args, **kwargs:
+                        subprocess.CompletedProcess(args[0], 0, output, ""))
+
+    assert advertising.read_supported_adv_sets("hci0") == 20
+
+
 def test_gatt_write_exposes_the_remote_device_path() -> None:
     writes: list[tuple[bytes, str | None]] = []
     char = GattCharacteristic(0, "uuid", ["write"], "/service")
@@ -84,12 +122,13 @@ def test_each_device_is_routed_to_the_board_it_connected_through() -> None:
         make_board("second", "Kilter Board#b002@3", second_data, connected),
     ])
 
-    mux._current_slot = 0
+    from ble.hci_monitor import AdvertisingConnection
+
+    mux._handle_hci_event(AdvertisingConnection(1, 0x40, "AA:00:00:00:00:01"))
     mux._handle_gatt_write(b"A", "/org/bluez/hci0/dev_AA")
-    mux._current_slot = 1
+    mux._handle_hci_event(AdvertisingConnection(2, 0x41, "BB:00:00:00:00:02"))
     mux._handle_gatt_write(b"B", "/org/bluez/hci0/dev_BB")
-    # Rotation no longer matters after the central has an assignment.
-    mux._current_slot = 0
+    # Later writes keep their original assignment.
     mux._handle_gatt_write(b"B2", "/org/bluez/hci0/dev_BB")
 
     assert first_data == [b"A"]
@@ -101,16 +140,22 @@ def test_each_device_is_routed_to_the_board_it_connected_through() -> None:
     }
 
 
-def test_exclusive_mode_advertises_only_the_unconnected_board() -> None:
+def test_single_client_mode_reenables_only_after_disconnect() -> None:
     mux = MultiplexedBLEPeripheral([
         make_board("first", "Kilter Board#a001@3"),
         make_board("second", "Kilter Board#b002@3"),
     ])
-    mux._current_slot = 0
-    mux._assign_device("/org/bluez/hci0/dev_AA", 0)
+    from ble.hci_monitor import AdvertisingConnection
 
-    assert mux._advertisable_slots() == [1]
-    assert mux._next_slot() == 1
+    mux._handle_hci_event(AdvertisingConnection(1, 0x40, "AA:BB:CC:DD:EE:FF"))
+    assert not mux._desired_enabled(0)
+    assert mux._desired_enabled(1)
+
+    pending = mux._take_pending("AA:BB:CC:DD:EE:FF")
+    assert pending is not None
+    mux._assign_device("/org/bluez/hci0/dev_AA", 0)
+    assert not mux._desired_enabled(0)
 
     mux.set_multi_connect(True)
-    assert mux._advertisable_slots() == [0, 1]
+    assert mux._desired_enabled(0)
+    assert mux._desired_enabled(1)

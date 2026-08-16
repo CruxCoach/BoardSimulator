@@ -225,6 +225,88 @@ def set_virtual_adv_data(uuid_str: str, name: str, random_address: bytes,
     return ok
 
 
+def configure_hardware_adv_set(uuid_str: str, name: str,
+                               random_address: bytes, handle: int,
+                               adapter: str = DEFAULT_ADAPTER) -> bool:
+    """Configure one hardware-offloaded set without enabling it.
+
+    Handles 1+ are used by the two-board backend so BlueZ's internal handle 0
+    remains out of the way.  The caller enables both configured sets in one
+    command after all parameters and payloads are installed.
+    """
+    if not 1 <= handle <= 0xef:
+        raise ValueError("hardware advertising handle must be in 1..239")
+    if len(random_address) != 6 or random_address[5] & 0xc0 != 0xc0:
+        raise ValueError("random_address must be a 6-byte static BLE address")
+    adv_data = build_adv_data(uuid_str)
+    scan_rsp = build_scan_response(name)
+    if len(scan_rsp) > 31:
+        raise ValueError(f"BLE name is too long for a legacy scan response: {name!r}")
+    h = f"{handle:02x}"
+    address_ok = _hcitool_cmd(f"adv {handle} random address", "0x08 0x0035", [
+        h, *[f"{octet:02x}" for octet in random_address],
+    ], adapter=adapter)
+    params_ok = _hcitool_cmd(f"adv {handle} params", "0x08 0x0036", [
+        h, "13", "00", "a0", "00", "00", "00", "01", "00", "07",
+        "01", "00", "00", "00", "00", "00", "00", "00", "00", "7f",
+        "01", "00", "01", h, "00",
+    ], adapter=adapter)
+    data_ok = _hcitool_cmd(f"adv {handle} data", "0x08 0x0037", [
+        h, "03", "01", f"{len(adv_data):02x}",
+        *[f"{octet:02x}" for octet in adv_data],
+    ], adapter=adapter)
+    scan_ok = _hcitool_cmd(f"adv {handle} scan rsp", "0x08 0x0038", [
+        h, "03", "01", f"{len(scan_rsp):02x}",
+        *[f"{octet:02x}" for octet in scan_rsp],
+    ], adapter=adapter)
+    return address_ok and params_ok and data_ok and scan_ok
+
+
+def set_adv_sets_enabled(handles: list[int], enabled: bool,
+                         adapter: str = DEFAULT_ADAPTER) -> bool:
+    """Enable or disable selected Extended Advertising handles together."""
+    if not handles:
+        return True
+    if any(not 1 <= handle <= 0xef for handle in handles):
+        raise ValueError("hardware advertising handles must be in 1..239")
+    params = ["01" if enabled else "00", f"{len(handles):02x}"]
+    for handle in handles:
+        params.extend([f"{handle:02x}", "00", "00", "00"])
+    action = "enable" if enabled else "disable"
+    return _hcitool_cmd(f"adv sets {action}", "0x08 0x0039", params,
+                        adapter=adapter)
+
+
+def remove_adv_set(handle: int, adapter: str = DEFAULT_ADAPTER) -> bool:
+    """Remove one Extended Advertising set from the controller."""
+    if not 1 <= handle <= 0xef:
+        raise ValueError("hardware advertising handle must be in 1..239")
+    return _hcitool_cmd(f"adv {handle} remove", "0x08 0x003c",
+                        [f"{handle:02x}"], adapter=adapter)
+
+
+def read_supported_adv_sets(adapter: str = DEFAULT_ADAPTER) -> int | None:
+    """Read the controller's hardware advertising-set count (HCI 0x203b)."""
+    cmd = ["hcitool", *hci_args(adapter), "cmd", "0x08", "0x003b"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        octets = line.strip().split()
+        if len(octets) >= 5:
+            try:
+                values = [int(value, 16) for value in octets]
+            except ValueError:
+                continue
+            # Command Complete payload: ncmd, opcode lo/hi, status, count.
+            if values[1:3] == [0x3b, 0x20] and values[3] == 0:
+                return values[4]
+    return None
+
+
 def set_extended_adv_data(uuid_str: str, name: str,
                           adapter: str = DEFAULT_ADAPTER) -> bool:
     """Set up Extended Advertising with legacy PDU on handle 0x00.

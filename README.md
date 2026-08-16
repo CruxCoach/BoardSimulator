@@ -137,20 +137,33 @@ sudo venv/bin/python main.py --board kilter --layout homewall \
     --instances 2 --serial a001 --second-serial b002
 ```
 
-The simulator alternates one connectable advertising set between two stable
-random BLE addresses. Once a phone connects to one identity, that link stays
-up while the other board is advertised. Incoming GATT writes contain the
-remote device path and are routed permanently to the corresponding board
+The simulator programs two connectable hardware advertising sets with stable,
+different random BLE addresses. Both boards are visible at the same time.
+Linux HCI events identify which advertising set accepted each connection;
+incoming GATT writes are then routed permanently to the corresponding board
 decoder and GUI panel. In the default `single` connection mode, a connected
-slot is no longer advertised; the other slot remains available.
+slot is no longer advertised; the other slot remains available. The adapter
+is made non-pairable while this mode runs, matching the boards' unpaired GATT
+workflow and avoiding desktop pairing prompts.
 
 Both slots initially use the selected board/layout. Aurora serials default to
 `0001` and `0002`; both boards are displayed side by side and each panel has
 its own Board/Layout/Size controls. Changing
 the simulation count or either board rebuilds BLE and disconnects existing
-clients. The two identities are time-multiplexed, so a scan can take several
-seconds to show both. Controller firmware still determines how many parallel
-LE links it can maintain.
+clients. Controller firmware still determines how many parallel LE links it
+can maintain. Two-board mode requires Extended Advertising hardware offload
+with at least three controller handles (BlueZ keeps handle 0; the simulator
+uses handles 1 and 2). Check it with:
+
+```bash
+sudo hcitool -i hci0 cmd 0x08 0x003b
+busctl get-property org.bluez /org/bluez/hci0 \
+    org.bluez.LEAdvertisingManager1 SupportedFeatures
+```
+
+The final byte of the HCI result is the supported-set count; `HardwareOffload`
+must be listed by BlueZ. Your controller's `14` hex means 20 sets and meets
+the requirement comfortably.
 
 Both bundled Kilter layouts render their board image; the geometry-dot fallback
 is used only for board/size combinations without an image asset.
@@ -206,7 +219,8 @@ protocols/
 ble/
   adapter.py            Adapter name → D-Bus path, match rule, hcitool -i
   peripheral.py         BlueZ D-Bus peripheral + fail-fast preflight
-  multiplex.py          Two stable virtual identities on one controller
+  multiplex.py          Two simultaneous hardware identities on one controller
+  hci_monitor.py        Advertising-handle → connection event mapping
   gatt.py               GATT profile → D-Bus objects
   advertising.py        Extended-Advertising HCI helpers
 render/                 GUI + headless per family
