@@ -2,6 +2,7 @@
 
 import struct
 
+import ble.hci_monitor as hci_monitor
 from ble.hci_monitor import (AdvertisingConnection, Disconnection,
                              HciEventParser)
 
@@ -46,3 +47,26 @@ def test_filters_other_adapters_and_parses_disconnect() -> None:
     parameters = bytes([0x00, 0x40, 0x00, 0x13])
     packet = monitor_packet(bytes([0x05, len(parameters)]) + parameters)
     assert parser.feed(packet, 0) == [Disconnection(0x0040, 0x13)]
+
+
+def test_monitor_uses_linux_abi_when_python_omits_constants(monkeypatch) -> None:
+    calls: list[tuple[int, int, int]] = []
+
+    class FakeSocket:
+        def __init__(self, family: int, kind: int, protocol: int) -> None:
+            calls.append((family, kind, protocol))
+
+        def setblocking(self, enabled: bool) -> None:
+            assert enabled is False
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(hci_monitor.socket, "socket", FakeSocket)
+    monkeypatch.setattr(hci_monitor, "_bind_monitor_channel", lambda sock: None)
+
+    monitor = hci_monitor.HciMonitor(0, lambda event: None)
+    monitor.open()
+    monitor.close()
+
+    assert calls == [(31, hci_monitor.socket.SOCK_RAW, 1)]

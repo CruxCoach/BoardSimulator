@@ -19,6 +19,12 @@ from typing import Callable
 
 logger = logging.getLogger(__name__)
 
+# Linux UAPI values from include/uapi/linux/socket.h and
+# include/net/bluetooth/bluetooth.h.  Some Python distributions (notably
+# Conda builds) omit the symbolic constants even though the running Linux
+# kernel supports the socket family.
+AF_BLUETOOTH = getattr(socket, "AF_BLUETOOTH", 31)
+BTPROTO_HCI = getattr(socket, "BTPROTO_HCI", 1)
 HCI_DEV_NONE = 0xffff
 HCI_CHANNEL_MONITOR = 2
 HCI_MON_EVENT_PKT = 3
@@ -42,7 +48,7 @@ class _SockaddrHci(ctypes.Structure):
 def _bind_monitor_channel(sock: socket.socket) -> None:
     """Bind an HCI monitor socket on every supported Python (3.10+)."""
     address = _SockaddrHci(
-        socket.AF_BLUETOOTH, HCI_DEV_NONE, HCI_CHANNEL_MONITOR)
+        AF_BLUETOOTH, HCI_DEV_NONE, HCI_CHANNEL_MONITOR)
     libc = ctypes.CDLL(None, use_errno=True)
     bind = libc.bind
     bind.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint]
@@ -133,8 +139,7 @@ class HciMonitor:
         self._socket: socket.socket | None = None
 
     def open(self) -> None:
-        sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_RAW,
-                             socket.BTPROTO_HCI)
+        sock = socket.socket(AF_BLUETOOTH, socket.SOCK_RAW, BTPROTO_HCI)
         try:
             _bind_monitor_channel(sock)
             sock.setblocking(False)
