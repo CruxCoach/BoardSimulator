@@ -243,13 +243,16 @@ def configure_hardware_adv_set(uuid_str: str, name: str,
     if len(scan_rsp) > 31:
         raise ValueError(f"BLE name is too long for a legacy scan response: {name!r}")
     h = f"{handle:02x}"
-    address_ok = _hcitool_cmd(f"adv {handle} random address", "0x08 0x0035", [
-        h, *[f"{octet:02x}" for octet in random_address],
-    ], adapter=adapter)
+    # Setting the parameters creates the advertising set.  Controllers return
+    # Unknown Advertising Identifier (0x42) when its random address is sent
+    # before this command.
     params_ok = _hcitool_cmd(f"adv {handle} params", "0x08 0x0036", [
         h, "13", "00", "a0", "00", "00", "00", "01", "00", "07",
         "01", "00", "00", "00", "00", "00", "00", "00", "00", "7f",
         "01", "00", "01", h, "00",
+    ], adapter=adapter)
+    address_ok = _hcitool_cmd(f"adv {handle} random address", "0x08 0x0035", [
+        h, *[f"{octet:02x}" for octet in random_address],
     ], adapter=adapter)
     data_ok = _hcitool_cmd(f"adv {handle} data", "0x08 0x0037", [
         h, "03", "01", f"{len(adv_data):02x}",
@@ -259,7 +262,11 @@ def configure_hardware_adv_set(uuid_str: str, name: str,
         h, "03", "01", f"{len(scan_rsp):02x}",
         *[f"{octet:02x}" for octet in scan_rsp],
     ], adapter=adapter)
-    return address_ok and params_ok and data_ok and scan_ok
+    ok = params_ok and address_ok and data_ok and scan_ok
+    if not ok:
+        _hcitool_cmd(f"adv {handle} cleanup", "0x08 0x003c", [h],
+                     adapter=adapter)
+    return ok
 
 
 def set_adv_sets_enabled(handles: list[int], enabled: bool,

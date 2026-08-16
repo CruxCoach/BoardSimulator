@@ -72,11 +72,11 @@ def test_two_hardware_sets_are_configured_and_enabled(monkeypatch) -> None:
     assert advertising.set_adv_sets_enabled([1, 2], True, "hci1")
 
     assert [opcode for opcode, _, _ in calls] == [
-        "0x08 0x0035", "0x08 0x0036", "0x08 0x0037",
+        "0x08 0x0036", "0x08 0x0035", "0x08 0x0037",
         "0x08 0x0038", "0x08 0x0039",
     ]
-    assert calls[0][1] == ["02"] + [f"{octet:02x}" for octet in address]
-    assert calls[1][1][0] == "02"
+    assert calls[0][1][0] == "02"
+    assert calls[1][1] == ["02"] + [f"{octet:02x}" for octet in address]
     assert calls[-1][1] == [
         "01", "02", "01", "00", "00", "00",
         "02", "00", "00", "00",
@@ -93,6 +93,22 @@ def test_supported_advertising_set_count_is_parsed(monkeypatch) -> None:
                         subprocess.CompletedProcess(args[0], 0, output, ""))
 
     assert advertising.read_supported_adv_sets("hci0") == 20
+
+
+def test_partially_configured_hardware_set_is_removed(monkeypatch) -> None:
+    opcodes: list[str] = []
+
+    def command(label, opcode, params, adapter="hci0") -> bool:
+        opcodes.append(opcode)
+        return opcode != "0x08 0x0035"
+
+    monkeypatch.setattr(advertising, "_hcitool_cmd", command)
+    address = advertising.static_random_address("board-a")
+
+    assert not advertising.configure_hardware_adv_set(
+        "00000000-0000-0000-0000-000000000001",
+        "Kilter Board#a001@3", address, 1)
+    assert opcodes[-1] == "0x08 0x003c"
 
 
 def test_gatt_write_exposes_the_remote_device_path() -> None:
