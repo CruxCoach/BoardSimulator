@@ -293,8 +293,6 @@ def _run_gui(selection, second_selection, api_level, serial, second_serial,
     """
     import tkinter as tk
 
-    from tkinter import ttk
-
     from ble.multiplex import MultiplexedBLEPeripheral, VirtualBoard
     from ble.peripheral import BLEPeripheral
 
@@ -361,12 +359,20 @@ def _run_gui(selection, second_selection, api_level, serial, second_serial,
         if count == 1:
             parents = [root]
         else:
-            notebook = ttk.Notebook(root)
-            notebook.pack(fill=tk.BOTH, expand=True)
+            workspace = tk.Frame(root, bg="#101014")
+            workspace.pack(fill=tk.BOTH, expand=True)
             parents = []
             for slot in range(2):
-                frame = tk.Frame(notebook, bg="#1a1a1a")
-                notebook.add(frame, text=f"Board {slot + 1}")
+                frame = tk.Frame(
+                    workspace, bg="#1a1a1a", highlightthickness=2,
+                    highlightbackground="#34343c")
+                frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
+                           padx=(4 if slot == 0 else 2,
+                                 4 if slot == 1 else 2), pady=4)
+                tk.Label(
+                    frame, text=f"BOARD {slot + 1}", bg="#34343c",
+                    fg="#f0f0f0", font=("Helvetica", 11, "bold"),
+                    pady=5).pack(fill=tk.X, side=tk.TOP)
                 parents.append(frame)
 
         panels = []

@@ -44,6 +44,7 @@ LABEL_FONT: tuple[str, int] = ("Helvetica", 9)
 # Image-mode constants — the photo is scaled so the canvas fits a
 # comfortable laptop screen while keeping the hold circles legible.
 IMAGE_TARGET_HEIGHT: int = 720
+DUAL_IMAGE_TARGET_HEIGHT: int = 520
 RING_WIDTH_IMAGE: int = 4
 HOLD_RADIUS_IMAGE: int = 16
 
@@ -113,6 +114,13 @@ class MoonBoardGUI:
         self._grid_rows = variant.grid_rows
         self._holds: HoldMap = {}
         self._status_text = "Advertising..."
+        self._compact = instance_count == 2
+        self._image_target_height = (
+            DUAL_IMAGE_TARGET_HEIGHT if self._compact else IMAGE_TARGET_HEIGHT)
+        self._cell_size = 30 if self._compact else CELL_SIZE
+        self._margin = 32 if self._compact else MARGIN
+        self._hold_radius = 11 if self._compact else HOLD_RADIUS
+        self._image_hold_radius = 12 if self._compact else HOLD_RADIUS_IMAGE
 
         # Try image mode first; fall back to procedural if anything is missing.
         self._image, holds_json = _load_image_assets(board, variant)
@@ -170,15 +178,15 @@ class MoonBoardGUI:
         if self._use_image_mode:
             return self._scaled_image_size()
         return (
-            NUM_COLUMNS * CELL_SIZE + 2 * MARGIN,
-            self._grid_rows * CELL_SIZE + 2 * MARGIN,
+            NUM_COLUMNS * self._cell_size + 2 * self._margin,
+            self._grid_rows * self._cell_size + 2 * self._margin,
         )
 
     # ── Image-mode rendering ──────────────────────────────────────
 
     def _scaled_image_size(self) -> tuple[int, int]:
         w, h = self._image.size
-        scale = IMAGE_TARGET_HEIGHT / h
+        scale = self._image_target_height / h
         return int(round(w * scale)), int(round(h * scale))
 
     def _draw_image_mode(self, holds_json: list[dict]) -> None:
@@ -200,8 +208,8 @@ class MoonBoardGUI:
             px = entry["x"] * self._canvas_w
             py = entry["y"] * self._canvas_h
             cell_id = self._canvas.create_oval(
-                px - HOLD_RADIUS_IMAGE, py - HOLD_RADIUS_IMAGE,
-                px + HOLD_RADIUS_IMAGE, py + HOLD_RADIUS_IMAGE,
+                px - self._image_hold_radius, py - self._image_hold_radius,
+                px + self._image_hold_radius, py + self._image_hold_radius,
                 outline="", fill="", width=0,
             )
             self._cells[(column, row)] = cell_id
@@ -215,15 +223,17 @@ class MoonBoardGUI:
 
     def _cell_center(self, column: int, row: int) -> tuple[float, float]:
         """Pixel centre of a grid cell in procedural mode. Row 0 = bottom."""
-        px = MARGIN + column * CELL_SIZE + CELL_SIZE / 2
-        py = MARGIN + (self._grid_rows - 1 - row) * CELL_SIZE + CELL_SIZE / 2
+        px = self._margin + column * self._cell_size + self._cell_size / 2
+        py = (self._margin + (self._grid_rows - 1 - row) * self._cell_size
+              + self._cell_size / 2)
         return px, py
 
     def _draw_procedural_grid(self) -> None:
         # Axis labels: column letters A..K (top + bottom).
         for column in range(NUM_COLUMNS):
             cx, _ = self._cell_center(column, 0)
-            for cy in (MARGIN / 2, self._canvas_h - MARGIN / 2):
+            for cy in (self._margin / 2,
+                       self._canvas_h - self._margin / 2):
                 self._canvas.create_text(
                     cx, cy, text=COLUMN_LETTERS[column],
                     fill=LABEL_COLOR, font=LABEL_FONT,
@@ -231,7 +241,8 @@ class MoonBoardGUI:
         # Axis labels: row numbers (left + right).
         for row in range(self._grid_rows):
             _, cy = self._cell_center(0, row)
-            for cx in (MARGIN / 2, self._canvas_w - MARGIN / 2):
+            for cx in (self._margin / 2,
+                       self._canvas_w - self._margin / 2):
                 self._canvas.create_text(
                     cx, cy, text=str(row + 1),
                     fill=LABEL_COLOR, font=LABEL_FONT,
@@ -241,8 +252,8 @@ class MoonBoardGUI:
             for row in range(self._grid_rows):
                 px, py = self._cell_center(column, row)
                 cell_id = self._canvas.create_oval(
-                    px - HOLD_RADIUS, py - HOLD_RADIUS,
-                    px + HOLD_RADIUS, py + HOLD_RADIUS,
+                    px - self._hold_radius, py - self._hold_radius,
+                    px + self._hold_radius, py + self._hold_radius,
                     outline=GRID_COLOR, fill=EMPTY_HOLD_COLOR, width=1,
                 )
                 self._cells[(column, row)] = cell_id

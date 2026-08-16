@@ -141,11 +141,12 @@ The simulator alternates one connectable advertising set between two stable
 random BLE addresses. Once a phone connects to one identity, that link stays
 up while the other board is advertised. Incoming GATT writes contain the
 remote device path and are routed permanently to the corresponding board
-decoder and GUI tab. In the default `single` connection mode, a connected
+decoder and GUI panel. In the default `single` connection mode, a connected
 slot is no longer advertised; the other slot remains available.
 
 Both slots initially use the selected board/layout. Aurora serials default to
-`0001` and `0002`; each tab has its own Board/Layout/Size controls. Changing
+`0001` and `0002`; both boards are displayed side by side and each panel has
+its own Board/Layout/Size controls. Changing
 the simulation count or either board rebuilds BLE and disconnects existing
 clients. The two identities are time-multiplexed, so a scan can take several
 seconds to show both. Controller firmware still determines how many parallel

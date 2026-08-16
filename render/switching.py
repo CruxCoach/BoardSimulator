@@ -61,6 +61,10 @@ class BoardBar:
         self._mode_row.pack(fill=tk.X)
         self._selection_row = tk.Frame(self._frame, bg=BAR_BG)
         self._selection_row.pack(fill=tk.X)
+        self._size_row = (tk.Frame(self._frame, bg=BAR_BG)
+                          if instance_count == 2 else self._selection_row)
+        if instance_count == 2:
+            self._size_row.pack(fill=tk.X)
 
         self._board_to_key = {dn: k for k, dn in sel.board_choices()}
         self._layout_to_key = {
@@ -80,7 +84,7 @@ class BoardBar:
         self._size_var = None
         if self._size_to_id:
             self._size_var = self._add_combo(
-                self._selection_row, "Size", list(self._size_to_id),
+                self._size_row, "Size", list(self._size_to_id),
                 self._display_for(self._size_to_id,
                                   sel.effective_size_id(current)),
                 self._on_size, width=18)

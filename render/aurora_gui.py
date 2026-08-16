@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Drawing constants
 CANVAS_HEIGHT: int = 750
+DUAL_CANVAS_HEIGHT: int = 520
 BACKGROUND_COLOR: str = "#1a1a1a"
 RING_WIDTH: int = 3
 HOLD_RADIUS: int = 14
@@ -75,8 +76,9 @@ class BoardGUI:
 
         # Compute canvas size from board aspect ratio
         aspect = geometry.size.aspect_ratio
-        self._canvas_h = CANVAS_HEIGHT
-        self._canvas_w = int(CANVAS_HEIGHT * aspect)
+        self._canvas_h = (DUAL_CANVAS_HEIGHT
+                          if instance_count == 2 else CANVAS_HEIGHT)
+        self._canvas_w = int(self._canvas_h * aspect)
 
         # Status bar
         self._status_var = tk.StringVar(value="Advertising...")
