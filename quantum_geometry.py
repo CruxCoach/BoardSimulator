@@ -53,16 +53,74 @@ class QuantumGeometry:
         return self.by_address16.get(address) or self.by_address32.get(address)
 
     def to_pixel(self, diode: QuantumDiode, width: int, height: int,
-                 padding: int = 0) -> tuple[float, float]:
-        """Map eWalls coordinates onto its original square image viewport.
+                 padding: int = 0, *, tablet: bool = False,
+                 compact_phone: bool = False) -> tuple[float, float]:
+        """Pixel-faithful eWalls 2.0.14 ``getBoardDiodePosition`` mapping.
 
-        The constants are recovered directly from the eWalls 2.0.14
-        ``toSvgX``/``toSvgY`` renderer. ``padding`` remains accepted for API
-        compatibility but is intentionally ignored: the image itself owns the
-        complete 1000-unit viewport.
+        eWalls calibrates all five models independently; Y is curved on XL/L/M
+        and Belay has two local corrections. ``height`` is accepted because
+        callers expose a rectangular API, but the original board-small view is
+        square and therefore uses ``width`` as its board size.
         """
         del padding
+        del height
+        calibration = _CALIBRATIONS[self.variant.key]
+        pad = _padding(self.variant.key, tablet, compact_phone)
+        board = float(width)
+        left = board * pad[0]
+        right = board * pad[1]
+        bottom = board * pad[2]
+        top = board * pad[3]
+        margin_left = board * pad[4]
+        usable_width = board - left - right
+        usable_height = board - bottom
+        inverted_y = 100.0 - diode.y
+        progress = inverted_y / 100.0
+        inverse_progress = 1.0 - progress
+
+        curve = (usable_height * calibration[4] * progress *
+                 inverse_progress)
+        corner = 0.0
+        adjust_x = 0.0
+        adjust_y = 0.0
+        if self.variant.key == "belay":
+            if progress <= .25 and (diode.x <= 25.5 or diode.x >= 68.0):
+                corner = board * -.006 * inverse_progress ** 2
+            edge = _clamp((diode.x - 50.0) / 18.0)
+            center = _clamp(1.0 - abs(progress - .5) / .18)
+            strength = edge * center * center
+            adjust_x = board * -.0065 * strength
+            adjust_y = board * -.0153 * strength
+
         return (
-            diode.x * 9.321401938851603 / 1000.0 * width,
-            (100.0 - diode.y) * 9.29368029739777 / 1000.0 * height,
+            diode.x * usable_width / calibration[0] + left +
+            board * calibration[2] + margin_left + adjust_x,
+            inverted_y * usable_height / calibration[1] +
+            board * calibration[3] + curve + corner - adjust_y + top,
         )
+
+
+# resizerX, resizerY, horizontal offset, vertical offset, vertical curve.
+_CALIBRATIONS = {
+    "xl": (106.1251, 107.6049, .06049128205128205, -.007924358974358975, .0067664),
+    "l": (106.1355, 107.4252, .060180256410256414, -.008901794871794872, .0048777),
+    "m": (106.1307, 107.4211, .060133589743589747, -.008902307692307692, .0047553),
+    "s": (108.9741, 108.7541, .062354102564102565, .0460225641025641, 0.0),
+    "belay": (108.5258, 111.4584, .07430256410256411, -.02787641025641026, -.0645251),
+}
+
+
+def _padding(model: str, tablet: bool,
+             compact_phone: bool) -> tuple[float, float, float, float, float]:
+    if model in {"xl", "l", "m"}:
+        return (-.015 if compact_phone and not tablet else 0.0,
+                .012, 0.0, 0.0, 0.0)
+    if model == "s":
+        return (.069, .305, .01, 0.0, 0.0)
+    if tablet:
+        return (-.08, -.087, -.161, 0.0, -.001)
+    return (-.08, -.083, -.16, .5, .003)
+
+
+def _clamp(value: float) -> float:
+    return max(0.0, min(1.0, value))

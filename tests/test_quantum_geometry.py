@@ -1,3 +1,5 @@
+import pytest
+
 from boards import board_for
 from quantum_geometry import QuantumGeometry
 from render.quantum_headless import render_holds_text
@@ -29,12 +31,30 @@ def test_known_diode_has_both_controller_address_forms() -> None:
 
 
 def test_pixel_mapping_matches_ewalls_2014_renderer() -> None:
-    geometry = QuantumGeometry(board_for("quantum").variant_for("xl"))
-    diode = geometry.diodes[0]
-    assert geometry.to_pixel(diode, 1000, 1000) == (
-        diode.x * 9.321401938851603,
-        (100.0 - diode.y) * 9.29368029739777,
-    )
+    expected = {
+        "xl": (210.39186, 183.37204),
+        "l": (210.24920, 183.10310),
+        "m": (210.23896, 183.09776),
+        "s": (167.43132, 200.47113),
+        "belay": (213.24794, 389.51393),
+    }
+    for model, point in expected.items():
+        geometry = QuantumGeometry(board_for("quantum").variant_for(model))
+        diode = type(geometry.diodes[0])(
+            address16=1, address32=1, kind=model, x=50.0, y=50.0)
+        actual = geometry.to_pixel(diode, 400, 400)
+        assert actual == pytest.approx(point, abs=.001)
+
+
+def test_belay_tablet_and_right_middle_corrections() -> None:
+    geometry = QuantumGeometry(board_for("quantum").variant_for("belay"))
+    diode_type = type(geometry.diodes[0])
+    center = diode_type(1, 1, "belay", 50.0, 50.0)
+    right = diode_type(2, 2, "belay", 68.0, 50.0)
+    assert geometry.to_pixel(center, 400, 400, tablet=True) == pytest.approx(
+        (212.38509, 189.68692), abs=.001)
+    assert geometry.to_pixel(right, 400, 400) == pytest.approx(
+        (287.80563, 395.63393), abs=.001)
 
 
 def test_headless_renderer_uses_hold_roles() -> None:

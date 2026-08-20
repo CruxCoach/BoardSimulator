@@ -60,7 +60,11 @@ class QuantumBoardGUI:
             self._canvas.create_rectangle(0, 0, canvas_w, canvas_h,
                                           fill=PANEL, outline="#596172")
         self._items: dict[int, int] = {}
-        radius = 3 if len(geometry.diodes) > 500 else 4
+        # eWalls draws a 20dp diode with a 4dp border on a phone board view
+        # of roughly 390dp. Scale that visual contract to this desktop canvas
+        # instead of shrinking dense models to near-invisible 6px dots.
+        radius = max(4, round(canvas_w * 10 / 390))
+        self._active_outline_width = max(2, round(canvas_w * 4 / 390))
         for diode in geometry.diodes:
             x, y = geometry.to_pixel(diode, canvas_w, canvas_h)
             item = self._canvas.create_oval(
@@ -78,11 +82,14 @@ class QuantumBoardGUI:
     def _apply(self, holds: QuantumHoldMap) -> None:
         try:
             for item in set(self._items.values()):
-                self._canvas.itemconfig(item, fill="#444b58", outline="#171a20")
+                self._canvas.itemconfig(
+                    item, fill="#444b58", outline="#171a20", width=1)
             for address, light in holds.items():
                 item = self._items.get(address)
                 if item is not None:
                     color = f"#{light.r:02x}{light.g:02x}{light.b:02x}"
-                    self._canvas.itemconfig(item, fill=color, outline="#ffffff")
+                    self._canvas.itemconfig(
+                        item, fill=color, outline="#ffffff",
+                        width=self._active_outline_width)
         except tk.TclError:
             return
