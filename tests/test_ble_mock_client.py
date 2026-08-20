@@ -27,10 +27,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from boards import PROTOCOL_AURORA, board_for  # noqa: E402
+from boards import (PROTOCOL_AURORA, PROTOCOL_MOONBOARD,
+                    PROTOCOL_QUANTUM, board_for)  # noqa: E402
 
 UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 RX_CHARACTERISTIC_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
+QUANTUM_WRITE_UUID = "0000fff2-0000-1000-8000-00805f9b34fb"
 
 # A sample MoonBoard climb frame. l#<token><serialPos>,...# — S=start,
 # P=hand, E=end/finish. This is the exact shape CruxCoach's
@@ -71,6 +73,12 @@ def build_chunks(board_key: str) -> list[bytes]:
     board = board_for(board_key)
     if board.protocol == PROTOCOL_AURORA:
         return build_aurora_chunks(board_key)
+    if board.protocol == PROTOCOL_QUANTUM:
+        from protocols.quantum import Command, encode_chunks
+        return encode_chunks(
+            Command.ACTIVATE_WALL, route_id="cruxcoach-e2e",
+            user_id="mock-client", color="#00aaff",
+            diodes=[1003, 1004, 1005])
     # MoonBoard: one ASCII frame, split to the 20-byte BLE chunk size.
     return [MOON_SAMPLE_FRAME[i:i + 20]
             for i in range(0, len(MOON_SAMPLE_FRAME), 20)]
@@ -103,6 +111,8 @@ async def main() -> None:
             if "@" not in name and "#" not in name:
                 return False
             return cruxcoach_brand_prefix_match(name, board.cruxcoach_prefix)
+        if board.protocol == PROTOCOL_QUANTUM:
+            return name.lower().startswith("quantum")
         # MoonBoard: bare "MoonBoard…" name prefix (CruxCoach
         # isMoonBoardName accepts both capitalisations).
         return name.startswith(("MoonBoard", "Moonboard"))
@@ -121,9 +131,10 @@ async def main() -> None:
         logger.info("Sending %d BLE chunks...", len(chunks))
         for chunk_idx, chunk in enumerate(chunks):
             logger.debug("Chunk %d: %s", chunk_idx, chunk.hex(" "))
-            await client.write_gatt_char(
-                RX_CHARACTERISTIC_UUID, chunk, response=False
-            )
+            characteristic = (QUANTUM_WRITE_UUID
+                              if board.protocol == PROTOCOL_QUANTUM
+                              else RX_CHARACTERISTIC_UUID)
+            await client.write_gatt_char(characteristic, chunk, response=False)
             await asyncio.sleep(0.05)
 
         logger.info("Climb sent — check the simulator window / log.")

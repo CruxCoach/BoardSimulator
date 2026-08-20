@@ -26,7 +26,8 @@ import threading
 
 import config
 from ble.adapter import DEFAULT_ADAPTER, InvalidAdapterError, normalize_adapter
-from boards import BOARDS, PROTOCOL_AURORA, board_for
+from boards import (BOARDS, PROTOCOL_AURORA, PROTOCOL_MOONBOARD,
+                    PROTOCOL_QUANTUM, board_for)
 from selection import Selection
 
 logging.basicConfig(
@@ -54,9 +55,13 @@ def print_board_list() -> None:
                     print(f"    --size {size.id}{sdefault}: {size.name} "
                           f"[edges l={size.edge_left} r={size.edge_right} "
                           f"b={size.edge_bottom} t={size.edge_top}]")
-            else:
+            elif board.protocol == PROTOCOL_MOONBOARD:
                 print(f"  --layout {variant.key}{default}: {variant.display_name} "
                       f"[11x{variant.grid_rows} grid, no --size]")
+            else:
+                subset = f", {variant.diode_kind} diodes" if variant.diode_kind else ""
+                print(f"  --layout {variant.key}{default}: {variant.display_name} "
+                      f"[{variant.columns}x{variant.rows} schematic{subset}, no --size]")
         print()
 
 
@@ -74,9 +79,8 @@ def _adapter_arg(value: str) -> str:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Software BLE simulator for all interactive CruxCoach "
-                    "boards (Kilter, Tension, Grasshopper, Decoy, So iLL, "
-                    "Touchstone — Aurora protocol; MoonBoard — NUS/ASCII).",
+        description="Software BLE simulator for CruxCoach boards: Aurora, "
+                    "MoonBoard and Quantum protocol families.",
     )
     parser.add_argument(
         "--board", default="kilter", choices=list(BOARDS),
@@ -86,7 +90,8 @@ def _parse_args() -> argparse.Namespace:
         "--layout", default=None,
         help="Board layout/variant key (e.g. kilter: original | homewall; "
              "tension: tb1 | tb2 | tb2-spray; moonboard: 2016 | "
-             "masters-2017 | masters-2019 | mini-2020). "
+             "masters-2017 | masters-2019 | mini-2020; quantum: "
+             "xl | l | m | s | belay). "
              "Default: the board's first variant.",
     )
     parser.add_argument(
@@ -212,7 +217,8 @@ def _run_headless(session, multi_connect: bool,
         ble_name=session.ble_name, profile=session.gatt_profile,
         on_data=session.feed,
         on_connect=lambda: renderer.update_status("Verbunden"),
-        on_disconnect=lambda: renderer.update_status("Advertising..."),
+        on_disconnect=lambda: (session.connection_lost(),
+                               renderer.update_status("Advertising...")),
         on_fatal=peripheral_failed,
         multi_connect=multi_connect,
         adapter=adapter,
@@ -257,7 +263,8 @@ def _run_headless_multi(sessions: list, multi_connect: bool,
             key=f"slot-{index + 1}", ble_name=session.ble_name,
             profile=session.gatt_profile, on_data=session.feed,
             on_connect=lambda r=renderer: r.update_status("Verbunden"),
-            on_disconnect=lambda r=renderer: r.update_status("Advertising..."),
+            on_disconnect=lambda r=renderer, s=session: (
+                s.connection_lost(), r.update_status("Advertising...")),
         )
         for index, (session, renderer) in enumerate(zip(sessions, renderers))
     ]
@@ -397,7 +404,8 @@ def _run_gui(selection, second_selection, api_level, serial, second_serial,
                 ble_name=session.ble_name, profile=session.gatt_profile,
                 on_data=session.feed,
                 on_connect=lambda p=panel: p.update_status("Verbunden"),
-                on_disconnect=lambda p=panel: p.update_status("Advertising..."),
+                on_disconnect=lambda p=panel, s=session: (
+                    s.connection_lost(), p.update_status("Advertising...")),
                 on_fatal=fatal, multi_connect=state["multi"], adapter=adapter)
         else:
             virtual_boards = [
@@ -405,7 +413,8 @@ def _run_gui(selection, second_selection, api_level, serial, second_serial,
                     key=f"slot-{slot + 1}", ble_name=session.ble_name,
                     profile=session.gatt_profile, on_data=session.feed,
                     on_connect=lambda p=panel: p.update_status("Verbunden"),
-                    on_disconnect=lambda p=panel: p.update_status("Advertising..."),
+                    on_disconnect=lambda p=panel, s=session: (
+                        s.connection_lost(), p.update_status("Advertising...")),
                 )
                 for slot, (session, panel) in enumerate(zip(sessions, panels))
             ]

@@ -15,8 +15,10 @@ from boards import (
     BOARDS,
     PROTOCOL_AURORA,
     PROTOCOL_MOONBOARD,
+    PROTOCOL_QUANTUM,
     AuroraVariant,
     MoonVariant,
+    QuantumVariant,
     board_for,
 )
 
@@ -27,23 +29,26 @@ def cruxcoach_normalise(name: str) -> str:
 
 
 class TestRegistry:
-    def test_all_seven_boards_present(self) -> None:
+    def test_all_eight_boards_present(self) -> None:
         assert sorted(BOARDS) == sorted([
             "kilter", "tension", "grasshopper", "decoy", "soill",
-            "touchstone", "moonboard",
+            "touchstone", "moonboard", "quantum",
         ])
 
     def test_protocol_families(self) -> None:
         aurora = {k for k, b in BOARDS.items() if b.protocol == PROTOCOL_AURORA}
         moon = {k for k, b in BOARDS.items() if b.protocol == PROTOCOL_MOONBOARD}
+        quantum = {k for k, b in BOARDS.items() if b.protocol == PROTOCOL_QUANTUM}
         assert aurora == {"kilter", "tension", "grasshopper", "decoy",
                           "soill", "touchstone"}
         assert moon == {"moonboard"}
+        assert quantum == {"quantum"}
 
     def test_variant_types_match_protocol(self) -> None:
         for board in BOARDS.values():
-            expected = (AuroraVariant if board.protocol == PROTOCOL_AURORA
-                        else MoonVariant)
+            expected = {PROTOCOL_AURORA: AuroraVariant,
+                        PROTOCOL_MOONBOARD: MoonVariant,
+                        PROTOCOL_QUANTUM: QuantumVariant}[board.protocol]
             for variant in board.variants:
                 assert isinstance(variant, expected), (board.key, variant)
 
@@ -67,6 +72,11 @@ class TestRegistry:
             base = os.path.join(board.assets_dir, variant.asset_base)
             assert os.path.isfile(base + ".webp"), variant.key
             assert os.path.isfile(base + ".json"), variant.key
+
+    def test_quantum_has_clean_geometry_fixture(self) -> None:
+        assert os.path.isfile(os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "data", "quantum_geometry.json"))
 
     def test_only_kilter_has_two_leds_per_hold(self) -> None:
         # leds_per_hold resource in the official apps: Kilter alone has 2.
@@ -164,12 +174,21 @@ class TestScannerCompatibility:
         assert "#" not in config.MOONBOARD_BLE_NAME
         assert "@" not in config.MOONBOARD_BLE_NAME
 
+    def test_quantum_name_has_mac_compatible_second_segment(self) -> None:
+        name = config.quantum_ble_name("xl")
+        prefix, identity = name.split("_")
+        assert prefix == "QuantumXL"
+        assert len(identity) == 12
+        int(identity, 16)
+
     def test_ble_names_fit_advertising_budget(self) -> None:
         # Complete Local Name AD structure: 2-byte header + name must fit
         # the 31-byte scan-response budget.
         for board in BOARDS.values():
             if board.protocol == PROTOCOL_AURORA:
                 name = config.aurora_ble_name(board.display_name)
-            else:
+            elif board.protocol == PROTOCOL_MOONBOARD:
                 name = config.MOONBOARD_BLE_NAME
+            else:
+                name = config.quantum_ble_name(board.default_variant.key)
             assert len(name.encode("utf-8")) <= 29, name

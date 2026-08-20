@@ -1,7 +1,7 @@
 # BoardSimulator — Consolidated software BLE simulator for all CruxCoach boards
 
-Pure-software simulation of **all seven interactive boards** from
-CruxCoach 0.2.0 on Linux via Bluetooth Low Energy (BLE), in a single
+Pure-software simulation of **all eight interactive board families** from
+CruxCoach on Linux via Bluetooth Low Energy (BLE), in a single
 codebase and selectable per CLI:
 
 | Board | Protocol | Layouts | Role IDs |
@@ -13,6 +13,7 @@ codebase and selectable per CLI:
 | **So iLL** | Aurora | Summer 2024 | 1–4 |
 | **Touchstone** | Aurora | Winter 2020 | 1–4 |
 | **MoonBoard** | NUS/ASCII | 2016, Masters 2017, Masters 2019, Mini 2020 | Token-based |
+| **Quantum Board** | CRC16/MODBUS + legacy JSON | XL, L, M, S, Belay | Start / step / finish / route |
 
 The PC acts as a BLE peripheral via the local Bluetooth adapter (BlueZ)
 and accepts connections from the respective official app or from
@@ -93,6 +94,9 @@ sudo venv/bin/python main.py --board tension --layout tb2
 # MoonBoard Mini 2020
 sudo venv/bin/python main.py --board moonboard --layout mini-2020
 
+# Quantum XL with an independently rendered diode schematic
+sudo venv/bin/python main.py --board quantum --layout xl
+
 # So iLL in headless mode
 sudo venv/bin/python main.py --board soill --headless
 
@@ -102,8 +106,8 @@ python main.py --list
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--board` | `kilter` | `kilter` `tension` `grasshopper` `decoy` `soill` `touchstone` `moonboard` |
-| `--layout` | first layout | e.g. Kilter: `original` `homewall`; Tension: `tb1` `tb2` `tb2-spray`; MoonBoard: `2016` `masters-2017` `masters-2019` `2024` `mini-2020` |
+| `--board` | `kilter` | `kilter` `tension` `grasshopper` `decoy` `soill` `touchstone` `moonboard` `quantum` |
+| `--layout` | first layout | e.g. Kilter: `original` `homewall`; MoonBoard: `2016` … `mini-2020`; Quantum: `xl` `l` `m` `s` `belay` |
 | `--size` | layout default | Aurora `product_size_id` (see `--list`) — Aurora boards only |
 | `--api-level` | `3` | Aurora protocol version (`2` or `3`), suffix `@N` in the BLE name — Aurora boards only |
 | `--serial` | `0001` | Serial number, suffix `#serial` in the BLE name — Aurora boards only |
@@ -115,7 +119,7 @@ python main.py --list
 | `--adapter` | `hci0` | Bluetooth controller to drive (`hci0`, `hci1`, … — see `hciconfig`) |
 | `--headless` | off | ASCII grid on stdout instead of GUI (also: `BOARDSIM_HEADLESS=1`) |
 
-Aurora-specific options on the MoonBoard abort with a clear error
+Aurora-specific options on the MoonBoard or Quantum abort with a clear error
 message — as does a start without a BlueZ/Bluetooth adapter
 (**fail-fast** instead of silently hanging).
 
@@ -191,6 +195,7 @@ In a separate terminal (while `main.py` is running):
 source venv/bin/activate
 pip install bleak   # only needed for the mock client
 python tests/test_ble_mock_client.py kilter      # or tension, moonboard, ...
+python tests/test_ble_mock_client.py quantum
 ```
 
 The test client scans using the same naming rules as CruxCoach, connects
@@ -210,12 +215,13 @@ venv/bin/python -m pytest tests/ -q
 
 ```
 main.py                 CLI → Session → BLE peripheral + renderer
-boards.py               Registry: 7 boards, 2 protocol families
+boards.py               Registry: 8 boards, 3 protocol families
 protocols/
   session.py            Family wiring: GATT profile, decoder, state
   aurora_decoder.py     Aurora binary protocol (API level 2 + 3)
   aurora_encoder.py     Reference encoder (CruxCoach BoardPacketEncoder port)
   moonboard.py          MoonBoard ASCII frames (NUS)
+  quantum.py            Quantum CRC16/MODBUS + legacy JSON
 ble/
   adapter.py            Adapter name → D-Bus path, match rule, hcitool -i
   peripheral.py         BlueZ D-Bus peripheral + fail-fast preflight
@@ -225,9 +231,11 @@ ble/
   advertising.py        Extended-Advertising HCI helpers
 render/                 GUI + headless per family
 board_geometry.py       LED↔hole coordinates, edges, roles (SQLite)
+quantum_geometry.py     Quantum address/coordinate lookup
 board_state.py          Thread-safe board state per family
 role_colors.py          Wire color → board-local role
 data/<brand>.sqlite3    Trimmed official board DBs
+data/quantum_geometry.json  route/user-free diode fixture
 assets/<brand>/         Board images / photos + coordinate maps
 ```
 
@@ -279,6 +287,25 @@ columns bottom to top, odd columns top to bottom; column height 18, or
 12 on the Mini 2020). The `~` config variants (`~D…#` = aux LEDs above
 the holds) are decoded as well.
 
+### Quantum Board
+
+Quantum clients discover a writable characteristic ending in `fff2` and a
+notification characteristic ending in `fff1`; the concrete service UUID is
+controller-dependent. The simulator exposes both under the conventional
+Bluetooth-base `fff0` service. Real-board clients must inspect characteristics
+rather than require that service UUID.
+
+Frames start with device address `01`, then command and payload, and end with a
+little-endian CRC-16/MODBUS. The simulator implements activate, swipe,
+route/user/all off, parameter changes, route-list requests, 32-bit LED
+activation, all-on and start/step/finish editor commands. It handles arbitrary
+GATT fragmentation and merges 92/32/120-diode app chunks. Errors never mutate
+the board; reconnect clears only a partial frame and preserves active LEDs.
+
+Firmware notification bytes have not been captured. Acknowledgements and
+errors are deterministic in-process diagnostics, not invented on-wire
+responses. See [the Quantum E2E guide](docs/quantum-e2e.md).
+
 ### Roles & colors (board-local!)
 
 | Board | start | middle | finish | foot |
@@ -303,6 +330,14 @@ full Kilter DB (restricted to Original + Homewall).
 (bolt-ons + screw-ons) of the KilterSimulator; `board_21.webp` is the
 byte-identical CruxCoach Homewall asset. The MoonBoard photos + coordinate
 maps come from the MoonSimulator. End users need none of these scripts.
+
+`data/quantum_geometry.json` is generated by
+`tools/build_quantum_geometry.py` from an authorised routes-delta snapshot. It
+retains only two controller address forms, hold class and coordinates; routes,
+users and setters are excluded. The canvas is drawn locally and contains no
+Walltopia board image. Android 1.44 proves one canonical big geometry and one
+small subset, so XL/L/M/Belay currently share the canonical schematic and S
+uses the small subset until model-specific controller captures exist.
 
 ## Troubleshooting
 

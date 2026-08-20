@@ -28,8 +28,10 @@ class TestList:
         for key in ("kilter", "tension", "grasshopper", "decoy", "soill",
                     "touchstone", "moonboard"):
             assert f"{key}:" in out
+        assert "quantum:" in out
         assert "[aurora protocol]" in out
         assert "[moonboard protocol]" in out
+        assert "[quantum protocol]" in out
 
     def test_list_shows_kilter_layouts_and_sizes(self) -> None:
         out = run_main("--list").stdout
@@ -42,6 +44,17 @@ class TestList:
         out = run_main("--list").stdout
         assert "--layout mini-2020: Mini MoonBoard 2020 [11x12 grid" in out
         assert "no --size" in out
+
+    def test_list_shows_all_quantum_models_without_sizes(self) -> None:
+        out = run_main("--list").stdout
+        for model in ("xl", "l", "m", "s", "belay"):
+            assert f"--layout {model}" in out
+        assert "Quantum XL [15x15 schematic" in out
+
+    def test_quantum_rejects_aurora_size(self) -> None:
+        result = run_main("--board", "quantum", "--size", "10", "--headless")
+        assert result.returncode == 2
+        assert "not Quantum" in result.stderr
 
 
 class TestValidation:

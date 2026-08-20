@@ -1,6 +1,6 @@
-"""Board registry: all seven interactive CruxCoach boards in one table.
+"""Board registry: all interactive CruxCoach boards in one table.
 
-Two protocol families share this registry:
+Three protocol families share this registry:
 
 - ``aurora`` — Kilter plus the five Aurora-family boards (Tension,
   Grasshopper, Decoy, So iLL, Touchstone). Same Aurora BLE protocol
@@ -10,6 +10,8 @@ Two protocol families share this registry:
   sizes / placement→LED maps, and role colours.
 - ``moonboard`` — its own protocol: Nordic UART Service advertised
   directly, plain-ASCII climb frames, photo/coordinate-map rendering.
+- ``quantum`` — fff2 writes using CRC16/MODBUS binary commands (plus legacy
+  JSON), with independent schematic rendering from diode coordinates.
 
 Everything here is static identity data, RE-verified against the official
 brand apps (decompiled `BluetoothServiceKt` / `StdBluetoothService` and the
@@ -41,6 +43,7 @@ ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
 PROTOCOL_AURORA = "aurora"
 PROTOCOL_MOONBOARD = "moonboard"
+PROTOCOL_QUANTUM = "quantum"
 
 
 @dataclass(frozen=True)
@@ -80,12 +83,30 @@ class MoonVariant:
 
 
 @dataclass(frozen=True)
+class QuantumVariant:
+    """One Quantum Board model rendered from independent diode geometry.
+
+    Android 1.44 exposes one canonical ``big`` geometry (both big and small
+    holds) and a ``small`` subset.  Until model-specific controller captures
+    are available, XL/L/M/Belay intentionally share the canonical geometry;
+    S uses the observed small subset. ``columns``/``rows`` describe the
+    physical panel proportions, not an invented diode-address transform.
+    """
+
+    key: str
+    display_name: str
+    columns: int
+    rows: int
+    diode_kind: str | None = None
+
+
+@dataclass(frozen=True)
 class Board:
     """Static identity of one simulated board."""
 
     key: str
     display_name: str        # also the BLE advertising-name prefix
-    protocol: str            # PROTOCOL_AURORA | PROTOCOL_MOONBOARD
+    protocol: str            # PROTOCOL_AURORA | PROTOCOL_MOONBOARD | QUANTUM
     official_filter: str     # official app's name filter (contains/prefix)
     cruxcoach_prefix: str    # CruxCoach's normalised brand prefix
     variants: tuple          # first entry = default layout/variant
@@ -230,6 +251,20 @@ BOARDS: dict[str, Board] = {
             # capture against a real Mini board still pending.
             MoonVariant("mini-2020", "Mini MoonBoard 2020", 12,
                         "mini_moonboard_2020"),
+        ),
+    ),
+    "quantum": Board(
+        key="quantum",
+        display_name="Quantum Board",
+        protocol=PROTOCOL_QUANTUM,
+        official_filter="Quantum",
+        cruxcoach_prefix="quantum",
+        variants=(
+            QuantumVariant("xl", "Quantum XL", 15, 15),
+            QuantumVariant("l", "Quantum L", 15, 12),
+            QuantumVariant("m", "Quantum M", 12, 12),
+            QuantumVariant("s", "Quantum S", 8, 12, "small"),
+            QuantumVariant("belay", "Quantum Belay", 8, 12),
         ),
     ),
 }

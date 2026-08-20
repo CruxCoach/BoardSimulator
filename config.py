@@ -1,11 +1,11 @@
 """Central configuration for the consolidated board simulator.
 
-Board identity (which of the seven boards is simulated, which layout and
+Board identity (which board is simulated, which layout and
 product size) is selected at runtime via the CLI — see main.py and the
 registry in boards.py. This module holds the protocol-level constants of
 both BLE protocol families and the runtime defaults.
 
-Two protocol families:
+Three protocol families:
 
 - Aurora (Kilter, Tension, Grasshopper, Decoy, So iLL, Touchstone):
   empty discovery service + Nordic UART Service, binary packets
@@ -13,6 +13,8 @@ Two protocol families:
   ``Name#serial@apiLevel``.
 - MoonBoard: Nordic UART Service only (advertised itself), plain-ASCII
   frames ``l#<token><pos>,…#``, advertised name is the bare "MoonBoard".
+- Quantum: characteristic-based fff2 writes, CRC16/MODBUS frames and an
+  independently selected XL/L/M/S/Belay schematic.
 """
 
 import os
@@ -63,6 +65,20 @@ MOONBOARD_BLE_NAME: str = "MoonBoard"
 # Serpentine-wired LED strip — the controller addresses 200 LEDs even
 # though only 198 carry holds (see protocols/moonboard.py).
 MOON_STRIP_LED_COUNT: int = 200
+
+# Quantum controllers are discovered by their fff2 (write) / fff1 (notify)
+# characteristics rather than a fixed service UUID. The simulator places
+# them under the conventional Bluetooth-base fff0 service; real hardware may
+# expose a controller-specific service UUID and clients must still inspect
+# characteristics as ewalls does.
+QUANTUM_SERVICE_UUID: str = "0000fff0-0000-1000-8000-00805f9b34fb"
+QUANTUM_NOTIFY_UUID: str = "0000fff1-0000-1000-8000-00805f9b34fb"
+QUANTUM_WRITE_UUID: str = "0000fff2-0000-1000-8000-00805f9b34fb"
+
+
+def quantum_ble_name(model_key: str, identity: str = "020000000001") -> str:
+    """Build a scanner-friendly localName with a MAC-like second segment."""
+    return f"Quantum{model_key.upper()}_{identity}"
 
 
 # ── Runtime ──────────────────────────────────────────────────────────────

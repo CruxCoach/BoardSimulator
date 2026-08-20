@@ -13,8 +13,10 @@ from boards import board_for
 from protocols.session import (
     AURORA_GATT_PROFILE,
     MOONBOARD_GATT_PROFILE,
+    QUANTUM_GATT_PROFILE,
     AuroraSession,
     MoonSession,
+    QuantumSession,
     create_session,
 )
 
@@ -53,11 +55,21 @@ class TestGattProfiles:
         assert tx.flags == ("notify",) and not tx.receives_writes
 
     def test_exactly_one_rx_characteristic_per_profile(self) -> None:
-        for profile in (AURORA_GATT_PROFILE, MOONBOARD_GATT_PROFILE):
+        for profile in (AURORA_GATT_PROFILE, MOONBOARD_GATT_PROFILE,
+                        QUANTUM_GATT_PROFILE):
             rx_count = sum(
                 1 for svc in profile.services
                 for char in svc.characteristics if char.receives_writes)
             assert rx_count == 1
+
+    def test_quantum_profile_shape(self) -> None:
+        profile = QUANTUM_GATT_PROFILE
+        assert profile.advertised_uuid == config.QUANTUM_SERVICE_UUID
+        (service,) = profile.services
+        write, notify = service.characteristics
+        assert write.uuid == config.QUANTUM_WRITE_UUID and write.receives_writes
+        assert notify.uuid == config.QUANTUM_NOTIFY_UUID
+        assert notify.flags == ("notify",)
 
 
 class TestSessionFactory:
@@ -72,6 +84,12 @@ class TestSessionFactory:
         session = make_session("moonboard")
         assert isinstance(session, MoonSession)
         assert session.gatt_profile is MOONBOARD_GATT_PROFILE
+
+    def test_quantum_gets_quantum_session(self) -> None:
+        session = make_session("quantum")
+        assert isinstance(session, QuantumSession)
+        assert session.gatt_profile is QUANTUM_GATT_PROFILE
+        assert session.ble_name.startswith("QuantumXL_")
 
     def test_aurora_ble_name_defaults(self) -> None:
         session = make_session("kilter")
@@ -128,6 +146,15 @@ class TestSessionDecoding:
         holds = session.state.get_holds()
         assert (0, 0) in holds and (10, 17) in holds
         assert len(holds) == 3
+
+    def test_quantum_session_decodes_and_preserves_state_on_reconnect(self) -> None:
+        from protocols.quantum import Command, encode
+        session = make_session("quantum", "s")
+        session.feed(encode(Command.ACTIVATE_WALL, route_id="r",
+                            color="#010203", diodes=[1003]))
+        assert list(session.state.get_holds()) == [1003]
+        session.disconnect()
+        assert list(session.state.get_holds()) == [1003]
 
     def test_moon_session_respects_variant_grid(self) -> None:
         # Mini 2020: 12-row serpentine — E131 is the top of column 10.

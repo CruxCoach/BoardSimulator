@@ -24,7 +24,7 @@ from boards import PROTOCOL_AURORA, board_for
 class Selection:
     """A fully-specified board choice.
 
-    ``size_id`` is ``None`` for MoonBoard (no product sizes) and, for an
+    ``size_id`` is ``None`` for MoonBoard/Quantum (no product sizes) and, for an
     Aurora board, means "the layout's default size".
     """
 

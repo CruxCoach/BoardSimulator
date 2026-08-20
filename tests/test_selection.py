@@ -10,10 +10,10 @@ from selection import Selection
 
 
 class TestChoices:
-    def test_board_choices_cover_all_seven(self) -> None:
+    def test_board_choices_cover_all_boards(self) -> None:
         keys = [k for k, _ in sel.board_choices()]
         assert set(keys) == {"kilter", "tension", "grasshopper", "decoy",
-                             "soill", "touchstone", "moonboard"}
+                             "soill", "touchstone", "moonboard", "quantum"}
 
     def test_layout_choices_for_kilter(self) -> None:
         assert sel.layout_choices("kilter") == [
@@ -28,6 +28,7 @@ class TestChoices:
 
     def test_size_choices_moonboard_empty(self) -> None:
         assert sel.size_choices("moonboard", "2016") == []
+        assert sel.size_choices("quantum", "xl") == []
 
 
 class TestSizeResolution:
@@ -61,4 +62,5 @@ class TestCascade:
             "kilter", "original", 8)
 
     def test_is_aurora(self) -> None:
-        assert sel.is_aurora("kilter") and not sel.is_aurora("moonboard")
+        assert sel.is_aurora("kilter")
+        assert not sel.is_aurora("moonboard") and not sel.is_aurora("quantum")

@@ -20,8 +20,8 @@ import logging
 
 import config
 from ble.gatt import CharacteristicSpec, GattProfile, ServiceSpec
-from board_state import AuroraBoardState, MoonBoardState
-from boards import PROTOCOL_AURORA, PROTOCOL_MOONBOARD, Board
+from board_state import AuroraBoardState, MoonBoardState, QuantumBoardState
+from boards import PROTOCOL_AURORA, PROTOCOL_MOONBOARD, PROTOCOL_QUANTUM, Board
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,27 @@ MOONBOARD_GATT_PROFILE = GattProfile(
     ),
 )
 
+QUANTUM_GATT_PROFILE = GattProfile(
+    description="Quantum fff2 write + fff1 notify",
+    advertised_uuid=config.QUANTUM_SERVICE_UUID,
+    services=(
+        ServiceSpec(
+            uuid=config.QUANTUM_SERVICE_UUID,
+            characteristics=(
+                CharacteristicSpec(
+                    uuid=config.QUANTUM_WRITE_UUID,
+                    flags=("write-without-response",),
+                    receives_writes=True,
+                ),
+                CharacteristicSpec(
+                    uuid=config.QUANTUM_NOTIFY_UUID,
+                    flags=("notify",),
+                ),
+            ),
+        ),
+    ),
+)
+
 
 class Session:
     """Common shape of one running simulator's protocol wiring."""
@@ -81,6 +102,9 @@ class Session:
     def feed(self, data: bytes) -> None:
         """Forward raw bytes from a GATT write to the protocol decoder."""
         raise NotImplementedError
+
+    def connection_lost(self) -> None:
+        """Reset per-link transport state; controller state stays intact."""
 
     def create_renderer(self, headless: bool = True):
         """Build the headless renderer (stdout grid) and wire it to the state."""
@@ -207,6 +231,53 @@ class MoonSession(Session):
         return panel
 
 
+class QuantumSession(Session):
+    """Quantum Board: CRC16/MODBUS commands plus legacy JSON."""
+
+    def __init__(self, board: Board, variant) -> None:
+        from protocols.quantum import QuantumProtocol
+        from quantum_geometry import QuantumGeometry
+
+        self.board = board
+        self.variant = variant
+        self.geometry = QuantumGeometry(variant)
+        addresses = tuple(d.address16 for d in self.geometry.diodes)
+        self.state = QuantumBoardState(addresses)
+        self.events = []
+        self._decoder = QuantumProtocol(self.state.apply, self.events.append)
+        self.ble_name = config.quantum_ble_name(variant.key)
+        self.gatt_profile = QUANTUM_GATT_PROFILE
+        self.window_title = f"Quantum Board Simulator — {variant.display_name}"
+
+    def feed(self, data: bytes) -> None:
+        self._decoder.feed(data)
+
+    def connection_lost(self) -> None:
+        """Drop partial transport data but preserve controller LED state."""
+        self._decoder.reset_transport()
+
+    disconnect = connection_lost
+    reconnect = connection_lost
+
+    def create_renderer(self, headless: bool = True):
+        from render.quantum_headless import QuantumHeadlessRenderer
+        renderer = QuantumHeadlessRenderer(self.geometry)
+        self.state.register_callback(renderer.update_holds)
+        return renderer
+
+    def create_panel(self, parent, selection, on_switch,
+                     multi_connect=False, on_connections=None,
+                     instance_count=1, on_instances=None):
+        from render.quantum_gui import QuantumBoardGUI
+        panel = QuantumBoardGUI(
+            parent, self.geometry, self.ble_name,
+            selection=selection, on_switch=on_switch,
+            multi_connect=multi_connect, on_connections=on_connections,
+            instance_count=instance_count, on_instances=on_instances)
+        self.state.register_callback(panel.update_holds)
+        return panel
+
+
 def create_session(board: Board, variant, size_id: int | None,
                    api_level: int | None, serial: str | None) -> Session:
     """Build the right session for a board's protocol family.
@@ -232,4 +303,14 @@ def create_session(board: Board, variant, size_id: int | None,
                 "boards, not the MoonBoard"
             )
         return MoonSession(board, variant)
+    if board.protocol == PROTOCOL_QUANTUM:
+        rejected = [name for name, value in (
+            ("--size", size_id), ("--api-level", api_level),
+            ("--serial", serial)) if value is not None]
+        if rejected:
+            raise ValueError(
+                f"{', '.join(rejected)} only applies to Aurora-protocol "
+                "boards, not Quantum"
+            )
+        return QuantumSession(board, variant)
     raise ValueError(f"unknown protocol family '{board.protocol}'")
