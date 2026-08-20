@@ -122,6 +122,18 @@ def test_gatt_write_exposes_the_remote_device_path() -> None:
     assert writes == [(b"abc", "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF")]
 
 
+def test_readable_characteristic_and_notification_value_are_stateful() -> None:
+    char = GattCharacteristic(
+        0, "uuid", ["read", "notify"], "/service", b"initial")
+    assert bytes(char._value) == b"initial"
+    char.StartNotify()
+    assert char.Notifying
+    char.notify(b"snapshot")
+    assert bytes(char.Value) == b"snapshot"
+    char.StopNotify()
+    assert not char.Notifying
+
+
 def test_profiles_are_merged_without_duplicate_services() -> None:
     merged = merge_profiles([PROFILE_A, PROFILE_B, PROFILE_A])
     assert [service.uuid for service in merged.services] == [

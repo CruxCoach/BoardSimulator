@@ -177,9 +177,10 @@ class TestScannerCompatibility:
     def test_quantum_name_has_mac_compatible_second_segment(self) -> None:
         name = config.quantum_ble_name("xl")
         prefix, identity = name.split("_")
-        assert prefix == "QuantumXL"
+        assert prefix == "QB"
         assert len(identity) == 12
         int(identity, 16)
+        assert config.quantum_ble_name("belay").startswith("QBB_")
 
     def test_ble_names_fit_advertising_budget(self) -> None:
         # Complete Local Name AD structure: 2-byte header + name must fit

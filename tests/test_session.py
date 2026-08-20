@@ -66,10 +66,12 @@ class TestGattProfiles:
         profile = QUANTUM_GATT_PROFILE
         assert profile.advertised_uuid == config.QUANTUM_SERVICE_UUID
         (service,) = profile.services
-        write, notify = service.characteristics
+        write, notify, state, identity = service.characteristics
         assert write.uuid == config.QUANTUM_WRITE_UUID and write.receives_writes
         assert notify.uuid == config.QUANTUM_NOTIFY_UUID
         assert notify.flags == ("notify",)
+        assert state.uuid == config.QUANTUM_STATE_UUID and state.flags == ("read",)
+        assert identity.uuid == config.QUANTUM_CONFIG_UUID and identity.flags == ("read",)
 
 
 class TestSessionFactory:
@@ -88,8 +90,23 @@ class TestSessionFactory:
     def test_quantum_gets_quantum_session(self) -> None:
         session = make_session("quantum")
         assert isinstance(session, QuantumSession)
-        assert session.gatt_profile is QUANTUM_GATT_PROFILE
-        assert session.ble_name.startswith("QuantumXL_")
+        assert session.gatt_profile.services[0].uuid == config.QUANTUM_SERVICE_UUID
+        assert session.ble_name.startswith("QB_")
+        identity = session.gatt_profile.services[0].characteristics[-1].initial_value
+        assert len(identity) == 41 and identity[34] == 0
+
+    def test_quantum_fff5_identity_has_current_model_type_mapping(self) -> None:
+        expected = {"xl": 0, "m": 1, "s": 2, "belay": 3, "l": 4}
+        for layout, type_byte in expected.items():
+            session = make_session("quantum", layout)
+            identity = session.gatt_profile.services[0].characteristics[-1].initial_value
+            assert len(identity) == 41
+            assert identity[34] == type_byte
+            assert identity[:24].rstrip(b"\0") == session.ble_name.encode("ascii")
+            assert identity[24:30] == bytes.fromhex("020000000001")
+            assert int.from_bytes(identity[35:37], "big") == session.variant.columns
+            assert int.from_bytes(identity[37:39], "big") == session.variant.rows
+            assert identity[30:34] == b"\0\0\0\0"  # unknown, not invented
 
     def test_aurora_ble_name_defaults(self) -> None:
         session = make_session("kilter")
@@ -150,8 +167,11 @@ class TestSessionDecoding:
     def test_quantum_session_decodes_and_preserves_state_on_reconnect(self) -> None:
         from protocols.quantum import Command, encode
         session = make_session("quantum", "s")
-        session.feed(encode(Command.ACTIVATE_WALL, route_id="r",
-                            color="#010203", diodes=[1003]))
+        session.feed(encode(
+            Command.ACTIVATE_WALL,
+            route_id="00112233-4455-6677-8899-aabbccddeeff",
+            user_id="ffeeddcc-bbaa-9988-7766-554433221100",
+            color="#010203", diodes=[1003]))
         assert list(session.state.get_holds()) == [1003]
         session.disconnect()
         assert list(session.state.get_holds()) == [1003]

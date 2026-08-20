@@ -86,18 +86,18 @@ class MoonVariant:
 class QuantumVariant:
     """One Quantum Board model rendered from independent diode geometry.
 
-    Android 1.44 exposes one canonical ``big`` geometry (both big and small
-    holds) and a ``small`` subset.  Until model-specific controller captures
-    are available, XL/L/M/Belay intentionally share the canonical geometry;
-    S uses the observed small subset. ``columns``/``rows`` describe the
-    physical panel proportions, not an invented diode-address transform.
+    ``catalog_type`` and route compatibility mirror eWalls 2.0.14. Exact
+    model-specific diode snapshots are incomplete, so the clean-room fixture
+    remains a clearly provisional visual aid, never an asserted wiring map.
     """
 
     key: str
     display_name: str
     columns: int
     rows: int
-    diode_kind: str | None = None
+    catalog_type: str
+    compatible_route_types: tuple[str, ...]
+    hardware_verified: bool = False
 
 
 @dataclass(frozen=True)
@@ -257,14 +257,18 @@ BOARDS: dict[str, Board] = {
         key="quantum",
         display_name="Quantum Board",
         protocol=PROTOCOL_QUANTUM,
-        official_filter="Quantum",
+        official_filter="QB",
         cruxcoach_prefix="quantum",
         variants=(
-            QuantumVariant("xl", "Quantum XL", 15, 15),
-            QuantumVariant("l", "Quantum L", 15, 12),
-            QuantumVariant("m", "Quantum M", 12, 12),
-            QuantumVariant("s", "Quantum S", 8, 12, "small"),
-            QuantumVariant("belay", "Quantum Belay", 8, 12),
+            QuantumVariant("xl", "Quantum XL", 15, 15, "big",
+                           ("big", "medium", "small")),
+            QuantumVariant("l", "Quantum L", 15, 12, "medium",
+                           ("medium", "small")),
+            QuantumVariant("m", "Quantum M", 12, 12, "small", ("small",)),
+            QuantumVariant("s", "Quantum S Fitness", 8, 12, "xsmall",
+                           ("xsmall",)),
+            QuantumVariant("belay", "Quantum Belay Board", 8, 12, "belay",
+                           ("belay",)),
         ),
     ),
 }

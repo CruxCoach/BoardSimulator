@@ -70,8 +70,29 @@ MOONBOARD_GATT_PROFILE = GattProfile(
     ),
 )
 
+def quantum_config_payload(variant, local_name: str) -> bytes:
+    """Build the 41-byte fff5 identity record parsed by eWalls 2.0.14."""
+    type_byte = {"big": 0, "small": 1, "xsmall": 2, "belay": 3,
+                 "medium": 4}[variant.catalog_type]
+    identity = local_name.rsplit("_", 1)[-1]
+    mac = bytes.fromhex(identity) if len(identity) == 12 else b"\0" * 6
+    payload = bytearray(41)
+    payload[:24] = local_name.encode("ascii")[:24].ljust(24, b"\0")
+    payload[24:30] = mac
+    # Controller protocol/firmware/auto-off values are not hardware-captured.
+    # Keep them explicitly unknown instead of confusing app version 2.0.14
+    # with controller firmware identity.
+    payload[30] = 0
+    payload[31:34] = bytes((0, 0, 0))
+    payload[34] = type_byte
+    payload[35:37] = variant.columns.to_bytes(2, "big")
+    payload[37:39] = variant.rows.to_bytes(2, "big")
+    payload[39:41] = (0).to_bytes(2, "big")
+    return bytes(payload)
+
+
 QUANTUM_GATT_PROFILE = GattProfile(
-    description="Quantum fff2 write + fff1 notify",
+    description="Quantum ffe0 service (fff1/fff2/fff4/fff5)",
     advertised_uuid=config.QUANTUM_SERVICE_UUID,
     services=(
         ServiceSpec(
@@ -85,6 +106,16 @@ QUANTUM_GATT_PROFILE = GattProfile(
                 CharacteristicSpec(
                     uuid=config.QUANTUM_NOTIFY_UUID,
                     flags=("notify",),
+                ),
+                CharacteristicSpec(
+                    uuid=config.QUANTUM_STATE_UUID,
+                    flags=("read",),
+                    initial_value=bytes((1, 0x47, 0, 0)),
+                ),
+                CharacteristicSpec(
+                    uuid=config.QUANTUM_CONFIG_UUID,
+                    flags=("read",),
+                    initial_value=bytes(41),
                 ),
             ),
         ),
@@ -246,11 +277,22 @@ class QuantumSession(Session):
         self.events = []
         self._decoder = QuantumProtocol(self.state.apply, self.events.append)
         self.ble_name = config.quantum_ble_name(variant.key)
-        self.gatt_profile = QUANTUM_GATT_PROFILE
+        config_value = quantum_config_payload(variant, self.ble_name)
+        service = QUANTUM_GATT_PROFILE.services[0]
+        self.gatt_profile = GattProfile(
+            QUANTUM_GATT_PROFILE.description,
+            QUANTUM_GATT_PROFILE.advertised_uuid,
+            (ServiceSpec(service.uuid, tuple(
+                CharacteristicSpec(
+                    char.uuid, char.flags, char.receives_writes,
+                    config_value if char.uuid == config.QUANTUM_CONFIG_UUID
+                    else char.initial_value)
+                for char in service.characteristics)),),
+        )
         self.window_title = f"Quantum Board Simulator — {variant.display_name}"
 
-    def feed(self, data: bytes) -> None:
-        self._decoder.feed(data)
+    def feed(self, data: bytes) -> list[bytes]:
+        return self._decoder.feed(data)
 
     def connection_lost(self) -> None:
         """Drop partial transport data but preserve controller LED state."""

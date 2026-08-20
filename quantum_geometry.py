@@ -29,8 +29,9 @@ class QuantumGeometry:
         if payload.get("schema") != 1:
             raise ValueError("unsupported Quantum geometry schema")
         diodes = [QuantumDiode(**item) for item in payload["diodes"]]
-        if variant.diode_kind is not None:
-            diodes = [d for d in diodes if d.kind == variant.diode_kind]
+        # The authorised snapshot is complete only for the ``big`` view.
+        # Do not resurrect the obsolete 1.44 big/small projection for current
+        # S/xsmall or Belay models; all non-big renderings are provisional.
         self.diodes = tuple(diodes)
         self.by_address16 = {d.address16: d for d in self.diodes}
         self.by_address32 = {d.address32: d for d in self.diodes}

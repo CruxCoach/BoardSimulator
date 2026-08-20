@@ -9,10 +9,11 @@ transport and renderer. It includes no Walltopia board-image asset.
 sudo venv/bin/python main.py --board quantum --layout xl
 ```
 
-CruxCoach should discover `QuantumXL_020000000001`, inspect GATT, select
+CruxCoach should discover `QB_020000000001` (`QBB_…` for Belay), inspect GATT, select
 `0000fff2-0000-1000-8000-00805f9b34fb` for write-without-response and
-optionally subscribe to `fff1`. Real boards may use another service UUID, so
-match characteristic suffixes rather than the simulator's `fff0` service.
+subscribe to `fff1`, read state at `fff4` and parse the 41-byte model identity
+from `fff5`, all below the current `ffe0` service (`fff0` remains the app's
+legacy fallback).
 
 From a second BLE adapter or host:
 
@@ -21,9 +22,10 @@ venv/bin/pip install bleak
 venv/bin/python tests/test_ble_mock_client.py quantum
 ```
 
-The GUI renders 657 diode positions for XL/L/M/Belay and the 432 independently
-observed small positions for S. The model changes panel proportions. It does
-not infer model-specific address maps from marketing images.
+The GUI renders the 657-position authorised big fixture as a provisional
+schematic for each model and changes panel proportions. It does not infer
+model-specific address maps from marketing images. Catalog types are
+XL=`big`, L=`medium`, M=`small`, S Fitness=`xsmall`, Belay=`belay`.
 
 ## Automated contract
 
@@ -35,15 +37,16 @@ venv/bin/python -m pytest \
   tests/test_multi_board.py -q
 ```
 
-This covers byte-identical ewalls 1.44 golden vectors, every command from
-`0x41` through `0x48` and `0x64` through `0x67`, one-byte fragmentation,
-multi-chunk messages, CRC rejection and recovery, injected command rejection,
-reconnect during a partial frame, swipe/off/change/editor semantics, legacy
-JSON and isolation between two Quantum sessions.
+This covers byte-identical eWalls 2.0.14 vectors (raw UUID, CRC big-endian,
+five-byte route-list request), every current command, one-byte fragmentation,
+92-diode multi-chunk messages, CRC rejection/recovery, Modbus exceptions,
+reconnect during a partial frame and isolation between sessions. Separate
+regressions pin 1.44's CRC little-endian, removed commands and legacy JSON.
 
-`ProtocolEvent` acknowledgements are simulator diagnostics. They are not sent
-as invented firmware notifications: ewalls 1.44 only logs `fff1` as UTF-8 and
-a real-controller response capture is still required for wire parity.
+Successful 2.0.14 writes send the minimum state notification accepted by the
+statically recovered `parseBroadcast`; fault profiles send exception frames.
+`ProtocolEvent` remains an in-process diagnostic. Firmware timing, retries and
+malformed-frame behaviour still require a real-controller capture.
 
 ## Two isolated boards
 

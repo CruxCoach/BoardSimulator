@@ -42,6 +42,7 @@ class CharacteristicSpec:
     uuid: str
     flags: tuple[str, ...]
     receives_writes: bool = False
+    initial_value: bytes = b""
 
 
 @dataclass(frozen=True)
@@ -69,12 +70,13 @@ class GattCharacteristic(ServiceInterface):
     """A single GATT characteristic exposed over D-Bus."""
 
     def __init__(self, index: int, uuid: str, flags: list[str],
-                 service_path: str):
+                 service_path: str, initial_value: bytes = b""):
         self.path = f"{service_path}/char{index}"
         self._uuid = uuid
         self._flags = flags
         self._service_path = service_path
-        self._value = bytearray()
+        self._value = bytearray(initial_value)
+        self._notifying = False
         self.write_callback: Callable[[bytes, str | None], None] | None = None
         super().__init__("org.bluez.GattCharacteristic1")
 
@@ -90,6 +92,14 @@ class GattCharacteristic(ServiceInterface):
     def Flags(self) -> "as":  # type: ignore  # noqa: N802
         return self._flags
 
+    @dbus_property(access=PropertyAccess.READ)
+    def Value(self) -> "ay":  # type: ignore  # noqa: N802
+        return self._value
+
+    @dbus_property(access=PropertyAccess.READ)
+    def Notifying(self) -> "b":  # type: ignore  # noqa: N802
+        return self._notifying
+
     @method()
     def ReadValue(self, options: "a{sv}") -> "ay":  # type: ignore  # noqa: N802
         return self._value
@@ -104,14 +114,21 @@ class GattCharacteristic(ServiceInterface):
 
     @method()
     def StartNotify(self) -> None:  # type: ignore  # noqa: N802
-        # Notify-only stubs (MoonBoard TX): a real board notifies the
-        # phone here, but the apps only ever write. Accept the
-        # subscription so the central is happy; never push anything.
-        logger.debug("StartNotify on %s (stub — no notifications sent)", self.path)
+        self._notifying = True
+        self.emit_properties_changed({"Notifying": True})
+        logger.debug("StartNotify on %s", self.path)
 
     @method()
     def StopNotify(self) -> None:  # type: ignore  # noqa: N802
+        self._notifying = False
+        self.emit_properties_changed({"Notifying": False})
         logger.debug("StopNotify on %s", self.path)
+
+    def notify(self, value: bytes) -> None:
+        """Update the characteristic and emit a BlueZ notification."""
+        self._value = bytearray(value)
+        if self._notifying:
+            self.emit_properties_changed({"Value": self._value})
 
 
 class GattService(ServiceInterface):
@@ -158,10 +175,39 @@ class GattApplication(ServiceInterface):
                         "UUID": Variant("s", char._uuid),
                         "Service": Variant("o", char._service_path),
                         "Flags": Variant("as", char._flags),
+                        "Value": Variant("ay", char._value),
+                        "Notifying": Variant("b", char._notifying),
                     },
                 }
 
         return objects
+
+    def notify(self, characteristic_uuid: str, value: bytes) -> bool:
+        wanted = characteristic_uuid.lower()
+        for service in self.services:
+            for characteristic in service.characteristics:
+                if characteristic._uuid.lower() == wanted:
+                    characteristic.notify(value)
+                    return True
+        return False
+
+    def notify_first(self, value: bytes) -> bool:
+        """Notify the profile's first notify-capable characteristic."""
+        for service in self.services:
+            for characteristic in service.characteristics:
+                if "notify" in characteristic._flags:
+                    characteristic.notify(value)
+                    return True
+        return False
+
+    def set_first_read_value(self, value: bytes) -> bool:
+        """Update the first read characteristic (Quantum's fff4 snapshot)."""
+        for service in self.services:
+            for characteristic in service.characteristics:
+                if "read" in characteristic._flags:
+                    characteristic._value = bytearray(value)
+                    return True
+        return False
 
 
 def build_application(profile: GattProfile,
@@ -176,7 +222,8 @@ def build_application(profile: GattProfile,
         service = GattService(svc_index, svc_spec.uuid)
         for char_index, char_spec in enumerate(svc_spec.characteristics):
             char = GattCharacteristic(
-                char_index, char_spec.uuid, list(char_spec.flags), service.path)
+                char_index, char_spec.uuid, list(char_spec.flags), service.path,
+                char_spec.initial_value)
             if char_spec.receives_writes:
                 char.write_callback = on_data
             service.characteristics.append(char)
@@ -205,6 +252,8 @@ def merge_profiles(profiles: list[GattProfile]) -> GattProfile:
                         flags=tuple(dict.fromkeys(previous.flags + char.flags)),
                         receives_writes=(previous.receives_writes
                                          or char.receives_writes),
+                        initial_value=(previous.initial_value
+                                       or char.initial_value),
                     )
     return GattProfile(
         description=" + ".join(dict.fromkeys(p.description for p in profiles)),

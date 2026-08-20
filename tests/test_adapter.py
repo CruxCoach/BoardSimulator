@@ -126,6 +126,25 @@ def make_peripheral(adapter: str = DEFAULT_ADAPTER) -> peripheral.BLEPeripheral:
     )
 
 
+def test_protocol_replies_are_forwarded_to_quantum_notify_characteristic() -> None:
+    sent: list[bytes] = []
+
+    class NotifyApp:
+        def set_first_read_value(self, value: bytes) -> None:
+            pass
+
+        def notify_first(self, value: bytes) -> None:
+            sent.append(value)
+
+    ble = peripheral.BLEPeripheral(
+        ble_name="QuantumXL_test", profile=PROFILE,
+        on_data=lambda data: [b"state", b"ack"])
+    ble._app = NotifyApp()
+    ble._handle_gatt_write(b"command")
+
+    assert sent == [b"state", b"ack"]
+
+
 @pytest.fixture
 def instant_sleep(monkeypatch):
     """Skip the advertising restart's BlueZ settling delays.

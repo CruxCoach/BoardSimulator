@@ -59,9 +59,9 @@ def print_board_list() -> None:
                 print(f"  --layout {variant.key}{default}: {variant.display_name} "
                       f"[11x{variant.grid_rows} grid, no --size]")
             else:
-                subset = f", {variant.diode_kind} diodes" if variant.diode_kind else ""
                 print(f"  --layout {variant.key}{default}: {variant.display_name} "
-                      f"[{variant.columns}x{variant.rows} schematic{subset}, no --size]")
+                      f"[{variant.columns}x{variant.rows} schematic, "
+                      f"catalog={variant.catalog_type}, provisional, no --size]")
         print()
 
 

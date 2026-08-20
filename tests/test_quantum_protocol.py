@@ -7,9 +7,24 @@ import json
 import pytest
 
 from board_state import QuantumBoardState
-from protocols.quantum import (CHUNK_LIMITS, Command, ProtocolEvent,
-                               QuantumProtocol, crc16_modbus, encode,
-                               encode_chunks)
+from protocols.quantum import (CHUNK_LIMITS, CURRENT_COMMANDS, Command,
+                               ProtocolEvent, QuantumProtocol, WireVersion,
+                               crc16_modbus, encode as quantum_encode,
+                               encode_broadcast, encode_chunks as quantum_chunks,
+                               encode_exception, uuid_from_bytes, uuid_to_bytes)
+
+
+ROUTE_UUID = "00112233-4455-6677-8899-aabbccddeeff"
+USER_UUID = "ffeeddcc-bbaa-9988-7766-554433221100"
+
+
+def encode(command, **kwargs):
+    """The original regression suite pins the explicit 1.44 dialect."""
+    return quantum_encode(command, wire=WireVersion.EWALLS_1_44, **kwargs)
+
+
+def encode_chunks(command, **kwargs):
+    return quantum_chunks(command, wire=WireVersion.EWALLS_1_44, **kwargs)
 
 
 GOLDEN = {
@@ -96,7 +111,7 @@ def test_fault_profile_rejects_command_without_state_change() -> None:
     protocol, state, events = make_protocol(reject={Command.TURN_ON_ALL})
     protocol.feed(encode(Command.TURN_ON_ALL, color="#ffffff"))
     assert state.get_holds() == {}
-    assert events[-1].code == "REJECTED"
+    assert events[-1].code == "SLAVE_DEVICE_FAILURE"
 
 
 def test_disconnect_drops_partial_frame_but_preserves_controller_state() -> None:
@@ -171,3 +186,94 @@ def test_two_quantum_sessions_never_share_route_or_transport_state() -> None:
     first.feed(frame_a[9:])
     assert list(first.state.get_holds()) == [1003]
     assert list(second.state.get_holds()) == [1004]
+
+
+CURRENT_GOLDEN = {
+    "off_all": "014500010000c59d",
+    "on_all": "01641122330102c185",
+    "request": "0147073252",
+    "activate": (
+        "014100112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100"
+        "102030012c0104000101022a10"
+    ),
+}
+
+
+def test_current_2014_golden_vectors_are_big_endian_crc_and_raw_uuid() -> None:
+    assert quantum_encode(Command.TURN_OFF_ALL).hex() == CURRENT_GOLDEN["off_all"]
+    assert quantum_encode(Command.TURN_ON_ALL, color="#112233", duration=258).hex() == CURRENT_GOLDEN["on_all"]
+    assert quantum_encode(Command.REQUEST_USER_ROUTE_LIST, row_number=7).hex() == CURRENT_GOLDEN["request"]
+    assert quantum_encode(
+        Command.ACTIVATE_WALL, route_id=ROUTE_UUID, user_id=USER_UUID,
+        color="#102030", duration=300, enable_animation=1,
+        diodes=[1, 258]).hex() == CURRENT_GOLDEN["activate"]
+
+
+def test_current_uuid_validation_and_roundtrip() -> None:
+    assert uuid_from_bytes(uuid_to_bytes(ROUTE_UUID)) == ROUTE_UUID
+    with pytest.raises(ValueError, match="32 hexadecimal"):
+        quantum_encode(Command.ACTIVATE_WALL, route_id="short", user_id=USER_UUID)
+    with pytest.raises(ValueError, match="hexadecimal"):
+        uuid_to_bytes("z" * 32)
+
+
+@pytest.mark.parametrize("command", sorted(CURRENT_COMMANDS, key=int))
+def test_every_current_command_roundtrips(command: Command) -> None:
+    protocol, _state, events = make_protocol()
+    kwargs = {}
+    if command in (Command.ACTIVATE_WALL, Command.BOARD_SWIPE):
+        kwargs.update(route_id=ROUTE_UUID, user_id=USER_UUID, diodes=[1, 258])
+    elif command == Command.TURN_OFF_BY_ROUTE:
+        kwargs["route_id"] = ROUTE_UUID
+    elif command == Command.TURN_OFF_BY_USER:
+        kwargs["user_id"] = USER_UUID
+    protocol.feed(quantum_encode(command, **kwargs))
+    assert events[-1] == ProtocolEvent(True, "ACK", command)
+
+
+def test_current_multi_chunk_crc_error_and_recovery() -> None:
+    protocol, state, events = make_protocol(tuple(range(200)))
+    frames = quantum_chunks(
+        Command.ACTIVATE_WALL, route_id=ROUTE_UUID, user_id=USER_UUID,
+        color="#00aaee", diodes=range(150))
+    damaged = bytearray(frames[0])
+    damaged[-1] ^= 1
+    replies = protocol.feed(bytes(damaged) + b"".join(frames))
+    assert len(state.get_holds()) == 150
+    assert events[0].code == "CRC"
+    assert replies[0] == encode_exception(Command.ACTIVATE_WALL, 3)
+
+
+def test_current_broadcast_shapes_match_2014_parser_contract() -> None:
+    protocol, _state, _events = make_protocol()
+    replies = protocol.feed(quantum_encode(
+        Command.ACTIVATE_WALL, route_id=ROUTE_UUID, user_id=USER_UUID,
+        color="#123456", duration=42, diodes=[1]))
+    assert replies == [bytes.fromhex(
+        "01410100" + ROUTE_UUID.replace("-", "") + USER_UUID.replace("-", "")
+        + "002a123456")]
+    assert encode_broadcast(protocol._decode(  # parser-independent shape check
+        quantum_encode(Command.REQUEST_USER_ROUTE_LIST),
+        Command.REQUEST_USER_ROUTE_LIST, WireVersion.EWALLS_2_0_14)) == b"\x01\x47\x00\x00"
+
+
+def test_route_list_snapshot_survives_reconnect_and_is_session_local() -> None:
+    first, _state, _events = make_protocol()
+    second, _other_state, _other_events = make_protocol()
+    first.feed(quantum_encode(
+        Command.ACTIVATE_WALL, route_id=ROUTE_UUID, user_id=USER_UUID,
+        color="#010203", duration=30, diodes=[1]))
+    first.reset_transport()
+    snapshot = first.feed(quantum_encode(Command.REQUEST_USER_ROUTE_LIST))[0]
+    empty = second.feed(quantum_encode(Command.REQUEST_USER_ROUTE_LIST))[0]
+    assert snapshot[1:4] == b"\x47\x01\x00"
+    assert len(snapshot) == 41
+    assert empty == b"\x01\x47\x00\x00"
+
+
+def test_removed_2014_encoder_commands_require_explicit_legacy_mode() -> None:
+    for command in (Command.CHANGE_ROUTE_PARAMS, Command.ACTIVATE_WALL_LED_ID,
+                    Command.SET_START_HOLDS, Command.SET_STEP_HOLDS,
+                    Command.SET_FINISH_HOLDS):
+        with pytest.raises(ValueError, match="not emitted"):
+            quantum_encode(command)

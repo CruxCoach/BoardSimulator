@@ -66,19 +66,19 @@ MOONBOARD_BLE_NAME: str = "MoonBoard"
 # though only 198 carry holds (see protocols/moonboard.py).
 MOON_STRIP_LED_COUNT: int = 200
 
-# Quantum controllers are discovered by their fff2 (write) / fff1 (notify)
-# characteristics rather than a fixed service UUID. The simulator places
-# them under the conventional Bluetooth-base fff0 service; real hardware may
-# expose a controller-specific service UUID and clients must still inspect
-# characteristics as ewalls does.
-QUANTUM_SERVICE_UUID: str = "0000fff0-0000-1000-8000-00805f9b34fb"
+# eWalls 2.0.14 prefers ffe0 and retains fff0 as a legacy service fallback.
+QUANTUM_SERVICE_UUID: str = "0000ffe0-0000-1000-8000-00805f9b34fb"
+QUANTUM_LEGACY_SERVICE_UUID: str = "0000fff0-0000-1000-8000-00805f9b34fb"
 QUANTUM_NOTIFY_UUID: str = "0000fff1-0000-1000-8000-00805f9b34fb"
 QUANTUM_WRITE_UUID: str = "0000fff2-0000-1000-8000-00805f9b34fb"
+QUANTUM_STATE_UUID: str = "0000fff4-0000-1000-8000-00805f9b34fb"
+QUANTUM_CONFIG_UUID: str = "0000fff5-0000-1000-8000-00805f9b34fb"
 
 
 def quantum_ble_name(model_key: str, identity: str = "020000000001") -> str:
-    """Build a scanner-friendly localName with a MAC-like second segment."""
-    return f"Quantum{model_key.upper()}_{identity}"
+    """Build the current eWalls scanner name; fff5 identifies the model."""
+    prefix = "QBB" if model_key.lower() == "belay" else "QB"
+    return f"{prefix}_{identity}"
 
 
 # ── Runtime ──────────────────────────────────────────────────────────────

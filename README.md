@@ -289,22 +289,22 @@ the holds) are decoded as well.
 
 ### Quantum Board
 
-Quantum clients discover a writable characteristic ending in `fff2` and a
-notification characteristic ending in `fff1`; the concrete service UUID is
-controller-dependent. The simulator exposes both under the conventional
-Bluetooth-base `fff0` service. Real-board clients must inspect characteristics
-rather than require that service UUID.
+eWalls 2.0.14 scans `QB_<12 hex>` / `QBB_<12 hex>` names, prefers the
+Bluetooth-base `ffe0` service (`fff0` is its legacy
+fallback), writes to `fff2`, subscribes to `fff1`, reads state from `fff4` and
+probes the 41-byte board identity at `fff5`. The simulator exposes that current
+shape and a model-specific identity record.
 
-Frames start with device address `01`, then command and payload, and end with a
-little-endian CRC-16/MODBUS. The simulator implements activate, swipe,
-route/user/all off, parameter changes, route-list requests, 32-bit LED
-activation, all-on and start/step/finish editor commands. It handles arbitrary
-GATT fragmentation and merges 92/32/120-diode app chunks. Errors never mutate
-the board; reconnect clears only a partial frame and preserves active LEDs.
+Current frames start with device address `01`, then command and payload, and end
+with a big-endian CRC-16/MODBUS word. UUIDs are exactly 16 raw bytes. The
+simulator implements the 2.0.14 commands (`41`–`45`, `47`, `64`), arbitrary
+GATT fragmentation and 92-diode chunks. Removed commands, 1.44's little-endian
+CRC/ASCII IDs and JSON remain isolated in the explicit legacy decoder. Errors
+never mutate the board; reconnect clears only a partial frame.
 
-Firmware notification bytes have not been captured. Acknowledgements and
-errors are deterministic in-process diagnostics, not invented on-wire
-responses. See [the Quantum E2E guide](docs/quantum-e2e.md).
+`fff1`/`fff4` responses match the static 2.0.14 `parseBroadcast` contract:
+route snapshots, user/all-off, all-on and Modbus exceptions. Exact firmware
+timing remains hardware-unverified. See [the Quantum E2E guide](docs/quantum-e2e.md).
 
 ### Roles & colors (board-local!)
 
@@ -335,9 +335,11 @@ maps come from the MoonSimulator. End users need none of these scripts.
 `tools/build_quantum_geometry.py` from an authorised routes-delta snapshot. It
 retains only two controller address forms, hold class and coordinates; routes,
 users and setters are excluded. The canvas is drawn locally and contains no
-Walltopia board image. Android 1.44 proves one canonical big geometry and one
-small subset, so XL/L/M/Belay currently share the canonical schematic and S
-uses the small subset until model-specific controller captures exist.
+Walltopia board image. The available authorised snapshot proves only the
+canonical big view. All five renderings therefore use that neutral geometry as
+a visibly provisional aid; none claims a model-specific wiring map. The 2.0.14
+catalog types are XL=`big`, L=`medium`, M=`small`, S Fitness=`xsmall` and
+Belay=`belay`, all with `hardware_verified=false`.
 
 ## Troubleshooting
 

@@ -14,7 +14,11 @@ def test_all_models_have_independent_schematic_geometry() -> None:
         assert len(geometry.by_address16) == len(geometry.diodes)
         assert len(geometry.by_address32) == len(geometry.diodes)
     assert counts == {"xl": 657, "l": 657, "m": 657,
-                      "s": 432, "belay": 657}
+                      "s": 657, "belay": 657}
+    assert {v.key: v.catalog_type for v in board.variants} == {
+        "xl": "big", "l": "medium", "m": "small",
+        "s": "xsmall", "belay": "belay"}
+    assert not any(v.hardware_verified for v in board.variants)
 
 
 def test_known_diode_has_both_controller_address_forms() -> None:

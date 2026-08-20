@@ -138,7 +138,7 @@ class BLEPeripheral:
     """
 
     def __init__(self, ble_name: str, profile: GattProfile,
-                 on_data: Callable[[bytes], None],
+                 on_data: Callable[[bytes], object],
                  on_connect: Callable[[], None] | None = None,
                  on_disconnect: Callable[[], None] | None = None,
                  on_fatal: Callable[[BaseException], None] | None = None,
@@ -159,6 +159,7 @@ class BLEPeripheral:
         self._thread: threading.Thread | None = None
         self._running = False
         self._bus: MessageBus | None = None
+        self._app = None
         # "BlueZ reports a connected Device1" — one of two link-state sources,
         # reconciled in _serve(). BlueZ does not create a Device1 object for
         # every central (random resolvable addresses), so this can stay False
@@ -226,7 +227,15 @@ class BLEPeripheral:
 
     def _handle_gatt_write(self, data: bytes, device: str | None = None) -> None:
         """Pass a GATT write through to the session decoder."""
-        self._on_data(data)
+        replies = self._on_data(data)
+        if self._app is None or not replies:
+            return
+        if isinstance(replies, (bytes, bytearray)):
+            replies = [bytes(replies)]
+        for reply in replies:
+            if len(reply) > 1 and not reply[1] & 0x80:
+                self._app.set_first_read_value(reply)
+            self._app.notify_first(reply)
 
     def _owns_device_path(self, path: str) -> bool:
         """Whether this D-Bus path is a central on THIS peripheral's adapter.
@@ -371,6 +380,7 @@ class BLEPeripheral:
 
         # -- Register GATT application ---------------------------------
         app = build_application(self._profile, self._handle_gatt_write)
+        self._app = app
 
         # Export all GATT objects on D-Bus
         self._bus.export(app.path, app)

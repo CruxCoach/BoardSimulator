@@ -3,7 +3,7 @@
 
 Usage: python tests/test_ble_mock_client.py [board-key]
        (board-key: kilter | tension | grasshopper | decoy | soill |
-        touchstone | moonboard, default kilter; must match the running
+        touchstone | moonboard | quantum, default kilter; must match the running
         simulator's --board)
 
 Requires the simulator (main.py) to be running first. Uses bleak as a
@@ -33,6 +33,9 @@ from boards import (PROTOCOL_AURORA, PROTOCOL_MOONBOARD,
 UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 RX_CHARACTERISTIC_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 QUANTUM_WRITE_UUID = "0000fff2-0000-1000-8000-00805f9b34fb"
+QUANTUM_NOTIFY_UUID = "0000fff1-0000-1000-8000-00805f9b34fb"
+QUANTUM_STATE_UUID = "0000fff4-0000-1000-8000-00805f9b34fb"
+QUANTUM_CONFIG_UUID = "0000fff5-0000-1000-8000-00805f9b34fb"
 
 # A sample MoonBoard climb frame. l#<token><serialPos>,...# — S=start,
 # P=hand, E=end/finish. This is the exact shape CruxCoach's
@@ -76,8 +79,9 @@ def build_chunks(board_key: str) -> list[bytes]:
     if board.protocol == PROTOCOL_QUANTUM:
         from protocols.quantum import Command, encode_chunks
         return encode_chunks(
-            Command.ACTIVATE_WALL, route_id="cruxcoach-e2e",
-            user_id="mock-client", color="#00aaff",
+            Command.ACTIVATE_WALL,
+            route_id="00112233-4455-6677-8899-aabbccddeeff",
+            user_id="ffeeddcc-bbaa-9988-7766-554433221100", color="#00aaff",
             diodes=[1003, 1004, 1005])
     # MoonBoard: one ASCII frame, split to the 20-byte BLE chunk size.
     return [MOON_SAMPLE_FRAME[i:i + 20]
@@ -112,7 +116,7 @@ async def main() -> None:
                 return False
             return cruxcoach_brand_prefix_match(name, board.cruxcoach_prefix)
         if board.protocol == PROTOCOL_QUANTUM:
-            return name.lower().startswith("quantum")
+            return name.startswith(("QB_", "QBB_"))
         # MoonBoard: bare "MoonBoard…" name prefix (CruxCoach
         # isMoonBoardName accepts both capitalisations).
         return name.startswith(("MoonBoard", "Moonboard"))
@@ -128,6 +132,19 @@ async def main() -> None:
     async with BleakClient(device) as client:
         logger.info("Connected to %s", device.name)
 
+        if board.protocol == PROTOCOL_QUANTUM:
+            identity = bytes(await client.read_gatt_char(QUANTUM_CONFIG_UUID))
+            state = bytes(await client.read_gatt_char(QUANTUM_STATE_UUID))
+            if len(identity) != 41:
+                raise RuntimeError(f"invalid fff5 identity length: {len(identity)}")
+            logger.info("fff5 board type=%d, dimensions=%dx%d, state=%s",
+                        identity[34], int.from_bytes(identity[35:37], "big"),
+                        int.from_bytes(identity[37:39], "big"), state.hex())
+            notifications = []
+            await client.start_notify(
+                QUANTUM_NOTIFY_UUID,
+                lambda _sender, value: notifications.append(bytes(value)))
+
         logger.info("Sending %d BLE chunks...", len(chunks))
         for chunk_idx, chunk in enumerate(chunks):
             logger.debug("Chunk %d: %s", chunk_idx, chunk.hex(" "))
@@ -139,6 +156,10 @@ async def main() -> None:
 
         logger.info("Climb sent — check the simulator window / log.")
         await asyncio.sleep(3.0)
+        if board.protocol == PROTOCOL_QUANTUM:
+            if not notifications:
+                raise RuntimeError("no fff1 state notification received")
+            logger.info("fff1 response: %s", notifications[-1].hex())
 
     logger.info("Disconnected.")
 
