@@ -11,7 +11,7 @@ Three protocol families share this registry:
 - ``moonboard`` — its own protocol: Nordic UART Service advertised
   directly, plain-ASCII climb frames, photo/coordinate-map rendering.
 - ``quantum`` — fff2 writes using CRC16/MODBUS binary commands (plus legacy
-  JSON), with independent schematic rendering from diode coordinates.
+  JSON), with original eWalls images and model-specific diode coordinates.
 
 Everything here is static identity data, RE-verified against the official
 brand apps (decompiled `BluetoothServiceKt` / `StdBluetoothService` and the
@@ -84,12 +84,7 @@ class MoonVariant:
 
 @dataclass(frozen=True)
 class QuantumVariant:
-    """One Quantum Board model rendered from independent diode geometry.
-
-    ``catalog_type`` and route compatibility mirror eWalls 2.0.14. Exact
-    model-specific diode snapshots are incomplete, so the clean-room fixture
-    remains a clearly provisional visual aid, never an asserted wiring map.
-    """
+    """One Quantum Board model with its eWalls image and diode geometry."""
 
     key: str
     display_name: str
@@ -97,6 +92,7 @@ class QuantumVariant:
     rows: int
     catalog_type: str
     compatible_route_types: tuple[str, ...]
+    asset_file: str
     hardware_verified: bool = False
 
 
@@ -261,14 +257,15 @@ BOARDS: dict[str, Board] = {
         cruxcoach_prefix="quantum",
         variants=(
             QuantumVariant("xl", "Quantum XL", 15, 15, "big",
-                           ("big", "medium", "small")),
+                           ("big", "medium", "small"), "board_xl.png"),
             QuantumVariant("l", "Quantum L", 15, 12, "medium",
-                           ("medium", "small")),
-            QuantumVariant("m", "Quantum M", 12, 12, "small", ("small",)),
+                           ("medium", "small"), "board_l.png"),
+            QuantumVariant("m", "Quantum M", 12, 12, "small", ("small",),
+                           "board_m.png"),
             QuantumVariant("s", "Quantum S Fitness", 8, 12, "xsmall",
-                           ("xsmall",)),
+                           ("xsmall",), "board_s.jpg"),
             QuantumVariant("belay", "Quantum Belay Board", 8, 12, "belay",
-                           ("belay",)),
+                           ("belay",), "board_belay.jpg"),
         ),
     ),
 }

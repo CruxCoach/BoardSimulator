@@ -49,7 +49,7 @@ class TestList:
         out = run_main("--list").stdout
         for model in ("xl", "l", "m", "s", "belay"):
             assert f"--layout {model}" in out
-        assert "Quantum XL [15x15 schematic" in out
+        assert "Quantum XL [15x15 original image" in out
 
     def test_quantum_rejects_aurora_size(self) -> None:
         result = run_main("--board", "quantum", "--size", "10", "--headless")

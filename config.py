@@ -14,7 +14,7 @@ Three protocol families:
 - MoonBoard: Nordic UART Service only (advertised itself), plain-ASCII
   frames ``l#<token><pos>,…#``, advertised name is the bare "MoonBoard".
 - Quantum: characteristic-based fff2 writes, CRC16/MODBUS frames and an
-  independently selected XL/L/M/S/Belay schematic.
+  independently selected XL/L/M/S/Belay image.
 """
 
 import os

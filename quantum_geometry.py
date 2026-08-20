@@ -19,19 +19,19 @@ class QuantumDiode:
 
 
 class QuantumGeometry:
-    """Address lookup and model-proportional schematic coordinates."""
+    """Address lookup and model-specific eWalls image coordinates."""
 
     def __init__(self, variant: QuantumVariant) -> None:
         self.variant = variant
         path = os.path.join(DATA_DIR, "quantum_geometry.json")
         with open(path, encoding="utf-8") as handle:
             payload = json.load(handle)
-        if payload.get("schema") != 1:
+        if payload.get("schema") != 2:
             raise ValueError("unsupported Quantum geometry schema")
-        diodes = [QuantumDiode(**item) for item in payload["diodes"]]
-        # The authorised snapshot is complete only for the ``big`` view.
-        # Do not resurrect the obsolete 1.44 big/small projection for current
-        # S/xsmall or Belay models; all non-big renderings are provisional.
+        model_rows = payload.get("models", {}).get(variant.key)
+        if not model_rows:
+            raise ValueError(f"missing Quantum geometry for {variant.key}")
+        diodes = [QuantumDiode(**item) for item in model_rows]
         self.diodes = tuple(diodes)
         self.by_address16 = {d.address16: d for d in self.diodes}
         self.by_address32 = {d.address32: d for d in self.diodes}
@@ -46,15 +46,23 @@ class QuantumGeometry:
 
     @property
     def aspect_ratio(self) -> float:
-        return self.variant.columns / self.variant.rows
+        # All five original eWalls board-small assets use a square canvas.
+        return 1.0
 
     def diode(self, address: int) -> QuantumDiode | None:
         return self.by_address16.get(address) or self.by_address32.get(address)
 
     def to_pixel(self, diode: QuantumDiode, width: int, height: int,
-                 padding: int = 24) -> tuple[float, float]:
-        usable_w = max(1, width - 2 * padding)
-        usable_h = max(1, height - 2 * padding)
-        nx = (diode.x - self._min_x) / (self._max_x - self._min_x)
-        ny = (diode.y - self._min_y) / (self._max_y - self._min_y)
-        return padding + nx * usable_w, height - padding - ny * usable_h
+                 padding: int = 0) -> tuple[float, float]:
+        """Map eWalls coordinates onto its original square image viewport.
+
+        The constants are recovered directly from the eWalls 2.0.14
+        ``toSvgX``/``toSvgY`` renderer. ``padding`` remains accepted for API
+        compatibility but is intentionally ignored: the image itself owns the
+        complete 1000-unit viewport.
+        """
+        del padding
+        return (
+            diode.x * 9.321401938851603 / 1000.0 * width,
+            (100.0 - diode.y) * 9.29368029739777 / 1000.0 * height,
+        )

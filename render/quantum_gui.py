@@ -1,9 +1,13 @@
-"""Own schematic Quantum Board renderer (no Walltopia image assets)."""
+"""Quantum Board renderer using the five original eWalls 2.0.14 images."""
 
 from __future__ import annotations
 
 import tkinter as tk
+import logging
+import os
 from typing import Callable
+
+from PIL import Image as PILImage, ImageTk
 
 from board_state import QuantumHoldMap
 from quantum_geometry import QuantumGeometry
@@ -12,6 +16,7 @@ from selection import Selection
 
 BACKGROUND = "#111318"
 PANEL = "#252932"
+logger = logging.getLogger(__name__)
 
 
 class QuantumBoardGUI:
@@ -25,7 +30,7 @@ class QuantumBoardGUI:
         self._parent = parent
         self._geometry = geometry
         canvas_h = 520 if instance_count == 2 else 750
-        canvas_w = max(420, int(canvas_h * geometry.aspect_ratio))
+        canvas_w = int(canvas_h * geometry.aspect_ratio)
         self._status = tk.StringVar(value="Advertising...")
         status = tk.Frame(parent, bg="#0b0d10")
         status.pack(fill=tk.X)
@@ -39,11 +44,21 @@ class QuantumBoardGUI:
         self._canvas = tk.Canvas(parent, width=canvas_w, height=canvas_h,
                                  bg=BACKGROUND, highlightthickness=0)
         self._canvas.pack()
-        margin = 14
-        self._canvas.create_polygon(
-            margin, canvas_h - margin, margin, margin,
-            canvas_w - margin, margin, canvas_w - margin, canvas_h - margin,
-            fill=PANEL, outline="#596172", width=2)
+        self._photo_ref: ImageTk.PhotoImage | None = None
+        path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                            "assets", "quantum", geometry.variant.asset_file)
+        try:
+            image = PILImage.open(path).convert("RGB")
+            image = image.resize((canvas_w, canvas_h), PILImage.LANCZOS)
+            self._photo_ref = ImageTk.PhotoImage(image)
+            self._canvas.create_image(0, 0, anchor=tk.NW,
+                                      image=self._photo_ref)
+            logger.info("Loaded original Quantum image: %s",
+                        geometry.variant.asset_file)
+        except Exception:
+            logger.exception("Failed to load Quantum image: %s", path)
+            self._canvas.create_rectangle(0, 0, canvas_w, canvas_h,
+                                          fill=PANEL, outline="#596172")
         self._items: dict[int, int] = {}
         radius = 3 if len(geometry.diodes) > 500 else 4
         for diode in geometry.diodes:

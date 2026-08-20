@@ -7,6 +7,7 @@ led_kit_name_substring resources.
 """
 
 import os
+import hashlib
 
 import pytest
 
@@ -77,6 +78,21 @@ class TestRegistry:
         assert os.path.isfile(os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
             "data", "quantum_geometry.json"))
+
+    def test_quantum_variants_have_original_ewalls_assets(self) -> None:
+        board = board_for("quantum")
+        expected = {
+            "board_xl.png": "73c1ddc6c11a9270dce36358953154fd47ae669403dc7907cb2943eb680bea32",
+            "board_l.png": "3f5e34981aafeff35f9aee8dbc321cc8741306e3c56e626557c14ed3a12cc51f",
+            "board_m.png": "4414bb3233b905c5699b527e76b87667bf9490ae66beb0fbef64a2d761c4dfc1",
+            "board_s.jpg": "07cbaa0f948a12b9f74a17b76f44bb2ca5307890a98f22631cdee3fa8a8af3e6",
+            "board_belay.jpg": "57e31a96fb8c3ff134b6c724656f5b7249f8439f1c163d98aa44dc8358b4601d",
+        }
+        for variant in board.variants:
+            path = os.path.join(board.assets_dir, variant.asset_file)
+            assert os.path.isfile(path), variant.key
+            with open(path, "rb") as handle:
+                assert hashlib.sha256(handle.read()).hexdigest() == expected[variant.asset_file]
 
     def test_only_kilter_has_two_leds_per_hold(self) -> None:
         # leds_per_hold resource in the official apps: Kilter alone has 2.

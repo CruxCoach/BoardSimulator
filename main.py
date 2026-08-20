@@ -60,7 +60,7 @@ def print_board_list() -> None:
                       f"[11x{variant.grid_rows} grid, no --size]")
             else:
                 print(f"  --layout {variant.key}{default}: {variant.display_name} "
-                      f"[{variant.columns}x{variant.rows} schematic, "
+                      f"[{variant.columns}x{variant.rows} original image, "
                       f"catalog={variant.catalog_type}, provisional, no --size]")
         print()
 
