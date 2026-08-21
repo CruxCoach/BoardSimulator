@@ -141,6 +141,17 @@ def _parse_args() -> argparse.Namespace:
              "Switchable at runtime in the GUI (default: %(default)s).",
     )
     parser.add_argument(
+        "--window-height", type=int, default=None, metavar="PX",
+        help="Board height the GUI window opens with, e.g. 1200 for a demo "
+             "on a projector (default: 750, or 520 per board with "
+             "--instances 2). The window is resizable either way — F11 "
+             "toggles fullscreen.",
+    )
+    parser.add_argument(
+        "--fullscreen", action="store_true",
+        help="Open the GUI in fullscreen (F11 toggles, Escape leaves it).",
+    )
+    parser.add_argument(
         "--headless", action="store_true",
         help="Run without the Tkinter GUI; log decoded holds to stdout. "
              "Can also be enabled via the BOARDSIM_HEADLESS env var.",
@@ -276,7 +287,8 @@ def _run_headless_multi(sessions: list, multi_connect: bool,
 
 def _run_gui(selection, second_selection, api_level, serial, second_serial,
              multi_connect: bool, instance_count: int = 1,
-             adapter: str = DEFAULT_ADAPTER) -> int:
+             adapter: str = DEFAULT_ADAPTER, window_height: int | None = None,
+             fullscreen: bool = False) -> int:
     """GUI mode: ONE persistent Tk root; a board-bar pick tears down the
     current panel + BLE peripheral and rebuilds them for the new board.
 
@@ -296,9 +308,26 @@ def _run_gui(selection, second_selection, api_level, serial, second_serial,
     from ble.multiplex import MultiplexedBLEPeripheral, VirtualBoard
     from ble.peripheral import BLEPeripheral
 
+    from render.layout import MIN_BOARD_HEIGHT
+
     root = tk.Tk()
     root.configure(bg="#1a1a1a")
-    root.resizable(False, False)
+    # Resizable: the panels re-fit their board on every <Configure>, so the
+    # whole view scales with the window (a demo wants it big).
+    root.resizable(True, True)
+    root.minsize(360, MIN_BOARD_HEIGHT)
+
+    def set_fullscreen(enabled: bool) -> None:
+        root.attributes("-fullscreen", enabled)
+
+    def toggle_fullscreen(_event=None) -> str:
+        set_fullscreen(not bool(root.attributes("-fullscreen")))
+        return "break"
+
+    root.bind("<F11>", toggle_fullscreen)
+    root.bind("<Escape>", lambda _event: set_fullscreen(False))
+    if fullscreen:
+        set_fullscreen(True)
     state: dict = {
         "ble": None, "fatal": False, "multi": multi_connect,
         "count": instance_count,
@@ -382,7 +411,8 @@ def _run_gui(selection, second_selection, api_level, serial, second_serial,
                 parent, state["selections"][slot],
                 lambda new_sel, index=slot: switch(index, new_sel),
                 state["multi"], set_connections,
-                instance_count=count, on_instances=set_instances)
+                instance_count=count, on_instances=set_instances,
+                board_height=window_height)
             panels.append(panel)
             logger.info("Board %d: %s — %s [%s protocol] / %s",
                         slot + 1, board.display_name, variant.display_name,
@@ -496,7 +526,8 @@ def main() -> int:
             return _run_headless(session, multi, args.adapter)
         return _run_gui(
             sel, second_sel, args.api_level, args.serial, second_serial,
-            multi, args.instances, args.adapter)
+            multi, args.instances, args.adapter, args.window_height,
+            args.fullscreen)
     finally:
         logger.info("Goodbye")
 

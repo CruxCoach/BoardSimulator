@@ -113,6 +113,8 @@ python main.py --list
 | `--second-size` | layout default | Initial Aurora size for slot 2 |
 | `--second-serial` | incremented | Distinct Aurora serial for slot 2 |
 | `--adapter` | `hci0` | Bluetooth controller to drive (`hci0`, `hci1`, … — see `hciconfig`) |
+| `--window-height` | `750` (`520` per board with two) | Board height the GUI window opens with — the window is resizable regardless |
+| `--fullscreen` | off | Open the GUI in fullscreen (F11 toggles, Escape leaves) |
 | `--headless` | off | ASCII grid on stdout instead of GUI (also: `BOARDSIM_HEADLESS=1`) |
 
 Aurora-specific options on the MoonBoard abort with a clear error
@@ -127,6 +129,27 @@ After starting:
 3. Climbs that are sent are visualized live — with the **board's own**
    role colors (Kilter e.g. middle=cyan/finish=magenta, So iLL
    middle=magenta/finish=white/foot=cyan)
+
+### Window size (demos, projectors)
+
+The GUI window is freely resizable and the **whole board view scales with
+it** — the board image (or MoonBoard photo) is re-rendered at the new
+size, hold rings are repositioned, and their radius and stroke width grow
+along with the board. The aspect ratio is kept, so a window that is wider
+than the board letterboxes instead of distorting it. In two-board mode
+both panels scale together.
+
+```bash
+# Fullscreen — F11 toggles it at runtime, Escape leaves it
+sudo venv/bin/python main.py --board kilter --fullscreen
+
+# Or open at a fixed, larger size
+sudo venv/bin/python main.py --board kilter --window-height 1200
+```
+
+While the window is being dragged the background is resampled cheaply and
+re-rendered sharply once the size settles, so resizing stays responsive
+even at full screen.
 
 ### Two boards at once (one adapter, two realms)
 

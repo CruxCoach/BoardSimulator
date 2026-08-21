@@ -88,13 +88,17 @@ class Session:
 
     def create_panel(self, parent, selection, on_switch,
                      multi_connect=False, on_connections=None,
-                     instance_count=1, on_instances=None):
+                     instance_count=1, on_instances=None,
+                     board_height=None):
         """Build the Tk GUI panel into ``parent`` and wire it to the state.
 
         Must be called from the main thread (Tkinter requirement). The
         controller (main._run_gui) owns a single persistent root + main loop;
         on a board-bar pick it tears the panel down and rebuilds it for the
         new selection. Returns an object with update_holds/update_status.
+
+        ``board_height`` overrides the height the panel opens with (--window
+        -height); the panel stays resizable regardless.
         """
         raise NotImplementedError
 
@@ -137,7 +141,8 @@ class AuroraSession(Session):
 
     def create_panel(self, parent, selection, on_switch,
                      multi_connect=False, on_connections=None,
-                     instance_count=1, on_instances=None):
+                     instance_count=1, on_instances=None,
+                     board_height=None):
         # Imported lazily so headless boxes without Tk still run.
         from render.aurora_gui import BoardGUI
         panel = BoardGUI(parent, self.geometry, self.ble_name, self.resolver,
@@ -145,7 +150,8 @@ class AuroraSession(Session):
                          multi_connect=multi_connect,
                          on_connections=on_connections,
                          instance_count=instance_count,
-                         on_instances=on_instances)
+                         on_instances=on_instances,
+                         board_height=board_height)
         self.state.register_callback(panel.update_holds)
         return panel
 
@@ -194,7 +200,8 @@ class MoonSession(Session):
 
     def create_panel(self, parent, selection, on_switch,
                      multi_connect=False, on_connections=None,
-                     instance_count=1, on_instances=None):
+                     instance_count=1, on_instances=None,
+                     board_height=None):
         # Imported lazily so headless boxes without Tk still run.
         from render.moon_gui import MoonBoardGUI
         panel = MoonBoardGUI(parent, self.board, self.variant,
@@ -202,7 +209,8 @@ class MoonSession(Session):
                              multi_connect=multi_connect,
                              on_connections=on_connections,
                              instance_count=instance_count,
-                             on_instances=on_instances)
+                             on_instances=on_instances,
+                             board_height=board_height)
         self.state.register_callback(panel.update_holds)
         return panel
 
