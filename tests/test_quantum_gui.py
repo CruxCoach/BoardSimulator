@@ -38,3 +38,18 @@ def test_active_diodes_are_transparent_colored_rings(monkeypatch) -> None:
     )
     assert all(call[1].get("outline") != "#ffffff"
                for call in panel._canvas.calls)
+
+
+def test_ring_is_thinned_from_the_outside(monkeypatch) -> None:
+    tkinter = ModuleType("tkinter")
+    monkeypatch.setitem(sys.modules, "tkinter", tkinter)
+    switching = ModuleType("render.switching")
+    switching.BoardBar = object
+    monkeypatch.setitem(sys.modules, "render.switching", switching)
+    monkeypatch.delitem(sys.modules, "render.quantum_gui", raising=False)
+
+    quantum_gui = importlib.import_module("render.quantum_gui")
+    radius, width = quantum_gui.ring_metrics(390)
+
+    assert (radius, width) == (8, 2)
+    assert radius - width == 10 - 4  # original inner radius is unchanged

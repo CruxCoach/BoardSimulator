@@ -19,6 +19,19 @@ PANEL = "#252932"
 logger = logging.getLogger(__name__)
 
 
+def ring_metrics(canvas_w: int) -> tuple[int, int]:
+    """Return ``(radius, width)`` with the original inner edge preserved.
+
+    The eWalls-derived ring used a 10dp radius and 4dp stroke. Trim half of
+    that stroke from the outside: reducing radius and width by the same amount
+    leaves the inner radius unchanged while making the ring less dominant.
+    """
+    original_radius = max(4, round(canvas_w * 10 / 390))
+    original_width = max(2, round(canvas_w * 4 / 390))
+    outside_trim = max(1, original_width // 2)
+    return original_radius - outside_trim, original_width - outside_trim
+
+
 class QuantumBoardGUI:
     def __init__(self, parent: tk.Misc, geometry: QuantumGeometry, ble_name: str,
                  selection: Selection | None = None,
@@ -65,8 +78,7 @@ class QuantumBoardGUI:
         # eWalls draws a 20dp diode with a 4dp border on a phone board view
         # of roughly 390dp. Scale that visual contract to this desktop canvas
         # instead of shrinking dense models to near-invisible 6px dots.
-        radius = max(4, round(canvas_w * 10 / 390))
-        self._active_outline_width = max(2, round(canvas_w * 4 / 390))
+        radius, self._active_outline_width = ring_metrics(canvas_w)
         for diode in geometry.diodes:
             x, y = geometry.to_pixel(diode, canvas_w, canvas_h)
             item = self._canvas.create_oval(
