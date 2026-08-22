@@ -71,7 +71,7 @@ class QuantumBoardGUI:
             x, y = geometry.to_pixel(diode, canvas_w, canvas_h)
             item = self._canvas.create_oval(
                 x - radius, y - radius, x + radius, y + radius,
-                fill="#444b58", outline="#171a20", width=1,
+                fill="", outline="", width=0,
                 state=tk.HIDDEN)
             self._items[diode.address16] = item
             self._items[diode.address32] = item
@@ -91,7 +91,7 @@ class QuantumBoardGUI:
                 if item is not None:
                     color = f"#{light.r:02x}{light.g:02x}{light.b:02x}"
                     self._canvas.itemconfig(
-                        item, fill=color, outline="#ffffff",
+                        item, fill="", outline=color,
                         width=self._active_outline_width, state=tk.NORMAL)
         except tk.TclError:
             return
