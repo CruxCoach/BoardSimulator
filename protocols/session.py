@@ -317,13 +317,15 @@ class QuantumSession(Session):
 
     def create_panel(self, parent, selection, on_switch,
                      multi_connect=False, on_connections=None,
-                     instance_count=1, on_instances=None):
+                     instance_count=1, on_instances=None,
+                     board_height=None):
         from render.quantum_gui import QuantumBoardGUI
         panel = QuantumBoardGUI(
             parent, self.geometry, self.ble_name,
             selection=selection, on_switch=on_switch,
             multi_connect=multi_connect, on_connections=on_connections,
-            instance_count=instance_count, on_instances=on_instances)
+            instance_count=instance_count, on_instances=on_instances,
+            board_height=board_height)
         self.state.register_callback(panel.update_holds)
         return panel
 

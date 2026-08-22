@@ -95,6 +95,28 @@ class TestSessionFactory:
         identity = session.gatt_profile.services[0].characteristics[-1].initial_value
         assert len(identity) == 41 and identity[34] == 0
 
+    def test_quantum_panel_accepts_window_height(self, monkeypatch) -> None:
+        import sys
+        from types import ModuleType
+
+        received = {}
+
+        class FakePanel:
+            def __init__(self, *args, **kwargs):
+                received.update(kwargs)
+
+            def update_holds(self, _holds) -> None:
+                pass
+
+        quantum_gui = ModuleType("render.quantum_gui")
+        quantum_gui.QuantumBoardGUI = FakePanel
+        monkeypatch.setitem(sys.modules, "render.quantum_gui", quantum_gui)
+        session = make_session("quantum")
+        session.create_panel(
+            object(), None, None, board_height=640)
+
+        assert received["board_height"] == 640
+
     def test_quantum_fff5_identity_has_current_model_type_mapping(self) -> None:
         expected = {"xl": 0, "m": 1, "s": 2, "belay": 3, "l": 4}
         for layout, type_byte in expected.items():

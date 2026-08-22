@@ -26,10 +26,12 @@ class QuantumBoardGUI:
                  multi_connect: bool = False,
                  on_connections: Callable[[bool], None] | None = None,
                  instance_count: int = 1,
-                 on_instances: Callable[[int], None] | None = None) -> None:
+                 on_instances: Callable[[int], None] | None = None,
+                 board_height: int | None = None) -> None:
         self._parent = parent
         self._geometry = geometry
-        canvas_h = 520 if instance_count == 2 else 750
+        default_h = 520 if instance_count == 2 else 750
+        canvas_h = board_height or default_h
         canvas_w = int(canvas_h * geometry.aspect_ratio)
         self._status = tk.StringVar(value="Advertising...")
         status = tk.Frame(parent, bg="#0b0d10")
