@@ -189,13 +189,46 @@ class TestSessionDecoding:
     def test_quantum_session_decodes_and_preserves_state_on_reconnect(self) -> None:
         from protocols.quantum import Command, encode
         session = make_session("quantum", "s")
-        session.feed(encode(
+        replies = session.feed(encode(
             Command.ACTIVATE_WALL,
             route_id="00112233-4455-6677-8899-aabbccddeeff",
             user_id="ffeeddcc-bbaa-9988-7766-554433221100",
             color="#010203", diodes=[1003]))
+        assert replies == []  # captured XL sends no automatic fff1 echo
         assert list(session.state.get_holds()) == [1003]
         session.disconnect()
+        assert list(session.state.get_holds()) == [1003]
+
+    def test_quantum_success_does_not_publish_fff1_or_rewrite_fff4(self) -> None:
+        from ble.gatt import build_application
+        from ble.peripheral import BLEPeripheral
+        from protocols.quantum import (Command, EWALLS_ROUTE_DURATION_SECONDS,
+                                       encode)
+
+        session = make_session("quantum", "xl")
+        peripheral = BLEPeripheral(
+            session.ble_name, session.gatt_profile, session.feed)
+        app = build_application(session.gatt_profile, lambda _data, _device: None)
+        peripheral._app = app
+        characteristics = {
+            char._uuid: char
+            for service in app.services
+            for char in service.characteristics
+        }
+        notify = characteristics[config.QUANTUM_NOTIFY_UUID]
+        state = characteristics[config.QUANTUM_STATE_UUID]
+
+        peripheral._handle_gatt_write(encode(
+            Command.ACTIVATE_WALL,
+            route_id="00112233-4455-6677-8899-aabbccddeeff",
+            user_id="ffeeddcc-bbaa-9988-7766-554433221100",
+            color="#010203", duration=EWALLS_ROUTE_DURATION_SECONDS,
+            diodes=[1003]))
+        peripheral._handle_gatt_write(
+            encode(Command.REQUEST_USER_ROUTE_LIST))
+
+        assert bytes(notify.Value) == b""
+        assert bytes(state.Value) == b"\x01\x47\x00\x00"
         assert list(session.state.get_holds()) == [1003]
 
     def test_moon_session_respects_variant_grid(self) -> None:

@@ -1,4 +1,10 @@
-"""Clean-room Quantum binary protocols (2.0.14 default, 1.44 legacy)."""
+"""Clean-room Quantum binary protocols (2.0.14 default, 1.44 legacy).
+
+The default response policy follows the captured Quantum XL controller: a
+successful ATT write changes the LEDs, but does not imply an application-level
+``fff1`` echo or a changed ``fff4`` route roster.  Parser-shaped state replies
+remain available as an explicitly synthetic app-test policy.
+"""
 
 from __future__ import annotations
 
@@ -32,6 +38,13 @@ class WireVersion(str, Enum):
     EWALLS_1_44 = "1.44"
 
 
+class ResponsePolicy(str, Enum):
+    """Controller response behaviour selected independently of wire syntax."""
+
+    OBSERVED_XL = "observed-xl"
+    SYNTHETIC_STATE = "synthetic-state"
+
+
 CURRENT_COMMANDS = frozenset({
     Command.ACTIVATE_WALL, Command.TURN_OFF_BY_ROUTE,
     Command.TURN_OFF_BY_USER, Command.BOARD_SWIPE, Command.TURN_OFF_ALL,
@@ -56,6 +69,11 @@ EXCEPTION_CODES = {
     10: "USER_ID_IN_ROUTESETTER_MODE", 11: "ACAD_ID_NOT_IN_MAP",
     254: "WRITE_ACK_TIMEOUT",
 }
+
+# eWalls 2.0.14's normal route-play path passes 0xffff.  This is an app-side
+# default recovered from the original implementation, not a firmware rule:
+# the captured XL lit both 300-second and 0xffff routes but kept fff4 empty.
+EWALLS_ROUTE_DURATION_SECONDS = 0xFFFF
 
 
 def crc16_modbus(data: bytes) -> int:
@@ -190,7 +208,11 @@ def encode_exception(command: Command | int, code: int) -> bytes:
 
 def encode_broadcast(action: QuantumAction,
                      players: Iterable[QuantumAction] | None = None) -> bytes | None:
-    """Encode a notification matching eWalls 2.0.14 parseBroadcast."""
+    """Encode synthetic state matching eWalls 2.0.14 ``parseBroadcast``.
+
+    This describes what the original app can parse.  It is not evidence that a
+    real controller echoes every accepted command; the captured XL does not.
+    """
     cmd = action.command
     if cmd in (Command.ACTIVATE_WALL, Command.BOARD_SWIPE):
         active = list(players) if players is not None else [action]
@@ -223,13 +245,15 @@ class QuantumProtocol:
     def __init__(self, on_action: Callable[[QuantumAction], None],
                  on_event: Callable[[ProtocolEvent], None] | None = None,
                  reject_commands: set[Command] | None = None,
-                 reject_code: int = 4) -> None:
+                 reject_code: int = 4,
+                 response_policy: ResponsePolicy = ResponsePolicy.OBSERVED_XL) -> None:
         self.on_action = on_action
         self.on_event = on_event
         self.reject_commands = reject_commands or set()
         if reject_code not in EXCEPTION_CODES:
             raise ValueError("unknown reject_code")
         self.reject_code = reject_code
+        self.response_policy = response_policy
         self._buffer = bytearray()
         self._json_buffer = ""
         self._continuation: tuple[Command, str, str, WireVersion] | None = None
@@ -297,9 +321,10 @@ class QuantumProtocol:
                 replies.append(encode_exception(command, 3))
                 continue
             self.on_action(action)
-            self._track_players(action)
             self._event(True, "ACK", command)
-            if wire is WireVersion.EWALLS_2_0_14:
+            if (wire is WireVersion.EWALLS_2_0_14 and
+                    self.response_policy is ResponsePolicy.SYNTHETIC_STATE):
+                self._track_players(action)
                 reply = encode_broadcast(action, self._players.values())
                 if reply is not None:
                     replies.append(reply)

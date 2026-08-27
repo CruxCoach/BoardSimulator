@@ -77,11 +77,13 @@ def build_chunks(board_key: str) -> list[bytes]:
     if board.protocol == PROTOCOL_AURORA:
         return build_aurora_chunks(board_key)
     if board.protocol == PROTOCOL_QUANTUM:
-        from protocols.quantum import Command, encode_chunks
+        from protocols.quantum import (Command, EWALLS_ROUTE_DURATION_SECONDS,
+                                       encode_chunks)
         return encode_chunks(
             Command.ACTIVATE_WALL,
             route_id="00112233-4455-6677-8899-aabbccddeeff",
             user_id="ffeeddcc-bbaa-9988-7766-554433221100", color="#00aaff",
+            duration=EWALLS_ROUTE_DURATION_SECONDS,
             diodes=[1003, 1004, 1005])
     # MoonBoard: one ASCII frame, split to the 20-byte BLE chunk size.
     return [MOON_SAMPLE_FRAME[i:i + 20]
@@ -151,15 +153,24 @@ async def main() -> None:
             characteristic = (QUANTUM_WRITE_UUID
                               if board.protocol == PROTOCOL_QUANTUM
                               else RX_CHARACTERISTIC_UUID)
-            await client.write_gatt_char(characteristic, chunk, response=False)
+            # The real fff2 declaration advertises write-without-response, but
+            # the Nokia/XL captures show Android using ATT Write Request and
+            # receiving Write Response. Exercise that observed app path.
+            await client.write_gatt_char(
+                characteristic, chunk,
+                response=(board.protocol == PROTOCOL_QUANTUM))
             await asyncio.sleep(0.05)
 
         logger.info("Climb sent — check the simulator window / log.")
         await asyncio.sleep(3.0)
         if board.protocol == PROTOCOL_QUANTUM:
-            if not notifications:
-                raise RuntimeError("no fff1 state notification received")
-            logger.info("fff1 response: %s", notifications[-1].hex())
+            state = bytes(await client.read_gatt_char(QUANTUM_STATE_UUID))
+            if state != b"\x01\x47\x00\x00":
+                raise RuntimeError(f"unexpected captured-XL fff4 state: {state.hex()}")
+            if notifications:
+                raise RuntimeError(
+                    f"unexpected automatic fff1 echo: {notifications[-1].hex()}")
+            logger.info("Captured-XL response matched: fff1 silent, fff4 empty")
 
     logger.info("Disconnected.")
 

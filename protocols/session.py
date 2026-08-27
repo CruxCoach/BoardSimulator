@@ -271,7 +271,12 @@ class MoonSession(Session):
 
 
 class QuantumSession(Session):
-    """Quantum Board: CRC16/MODBUS commands plus legacy JSON."""
+    """Quantum Board using the response behaviour captured from a real XL.
+
+    Valid commands update the rendered LEDs, while fff4 remains the last
+    controller-published snapshot (initially empty) and fff1 stays silent.
+    Protocol fault injection can still publish Modbus exception notifications.
+    """
 
     def __init__(self, board: Board, variant) -> None:
         from protocols.quantum import QuantumProtocol

@@ -325,9 +325,15 @@ GATT fragmentation and 92-diode chunks. Removed commands, 1.44's little-endian
 CRC/ASCII IDs and JSON remain isolated in the explicit legacy decoder. Errors
 never mutate the board; reconnect clears only a partial frame.
 
-`fff1`/`fff4` responses match the static 2.0.14 `parseBroadcast` contract:
-route snapshots, user/all-off, all-on and Modbus exceptions. Exact firmware
-timing remains hardware-unverified. See [the Quantum E2E guide](docs/quantum-e2e.md).
+The default response personality follows two real XL captures: accepted writes
+light the simulated wall, but do not invent a `fff1` echo and leave `fff4` at
+the controller-published empty snapshot. The original app's normal route-play
+duration is `0xffff`; this XL also lit finite-duration routes, but reported
+neither in its roster. Parser-compatible route snapshots remain available only
+through an explicitly synthetic protocol test policy. Fault profiles emit
+Modbus exceptions without mutating LEDs. The capture evidence, an observed
+`Invalid Handle` during a later route-list refresh, and the remaining hardware
+boundaries are documented in [the Quantum E2E guide](docs/quantum-e2e.md).
 
 ### Roles & colors (board-local!)
 
