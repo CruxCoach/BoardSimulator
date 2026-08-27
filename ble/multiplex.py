@@ -24,7 +24,7 @@ from ble.adapter import (DEFAULT_ADAPTER, adapter_path, device_path_prefix,
 from ble.advertising import (configure_hardware_adv_set,
                              read_supported_adv_sets, remove_adv_set,
                              set_adv_sets_enabled, static_random_address)
-from ble.gatt import GattProfile, build_application, merge_profiles
+from ble.gatt import GattProfile, GattUpdate, build_application, merge_profiles
 from ble.hci_monitor import AdvertisingConnection, Disconnection, HciMonitor
 from ble.peripheral import BLUEZ_SERVICE, GATT_MANAGER_IFACE
 
@@ -38,7 +38,7 @@ class VirtualBoard:
     key: str
     ble_name: str
     profile: GattProfile
-    on_data: Callable[[bytes], None]
+    on_data: Callable[[bytes], list[GattUpdate | bytes] | bytes | None]
     on_connect: Callable[[], None] | None = None
     on_disconnect: Callable[[], None] | None = None
     address: bytes = field(init=False)
@@ -87,6 +87,40 @@ class MultiplexedBLEPeripheral:
         self._pending: deque[_PendingConnection] = deque()
         self._enabled = [False, False]
         self._sync_needed = False
+        self._app = None
+        self._slot_read_values = [
+            self._initial_read_values(board.profile) for board in boards]
+        self._notify_uuid_counts: dict[str, int] = {}
+        for board in boards:
+            for uuid in self._notify_characteristic_uuids(board.profile):
+                self._notify_uuid_counts[uuid] = (
+                    self._notify_uuid_counts.get(uuid, 0) + 1)
+
+    @staticmethod
+    def _notify_characteristic_uuids(profile: GattProfile) -> set[str]:
+        return {
+            char.uuid.lower()
+            for service in profile.services
+            for char in service.characteristics
+            if "notify" in char.flags
+        }
+
+    @staticmethod
+    def _initial_read_values(profile: GattProfile) -> dict[str, bytes]:
+        return {
+            char.uuid.lower(): char.initial_value
+            for service in profile.services
+            for char in service.characteristics
+            if "read" in char.flags
+        }
+
+    @staticmethod
+    def _first_uuid(profile: GattProfile, flag: str) -> str | None:
+        for service in profile.services:
+            for char in service.characteristics:
+                if flag in char.flags:
+                    return char.uuid
+        return None
 
     @property
     def adapter(self) -> str:
@@ -150,7 +184,7 @@ class MultiplexedBLEPeripheral:
                     return pending
         return self._pending.popleft() if self._pending else None
 
-    def _slot_for_write(self, device: str | None) -> int | None:
+    def _slot_for_access(self, device: str | None) -> int | None:
         if device and device in self._assignments:
             return self._assignments[device]
         pending = self._take_pending(self._path_address(device)) if device else None
@@ -161,11 +195,72 @@ class MultiplexedBLEPeripheral:
         return pending.slot
 
     def _handle_gatt_write(self, data: bytes, device: str | None) -> None:
-        slot = self._slot_for_write(device)
+        slot = self._slot_for_access(device)
         if slot is None:
             logger.warning("Dropping GATT write without an advertising-set assignment")
             return
-        self._boards[slot].on_data(data)
+        replies = self._boards[slot].on_data(data)
+        if self._app is None or not replies:
+            return
+        if isinstance(replies, (bytes, bytearray)):
+            replies = [bytes(replies)]
+        for reply in replies:
+            self._publish_reply(slot, reply)
+
+    def _publish_reply(self, slot: int,
+                       reply: GattUpdate | bytes | bytearray) -> None:
+        """Publish through this board's characteristics, never a neighbour's."""
+        if self._app is None:
+            return
+        board = self._boards[slot]
+        notify_uuid = self._first_uuid(board.profile, "notify")
+        read_uuid = self._first_uuid(board.profile, "read")
+        if isinstance(reply, GattUpdate):
+            if reply.read_value is not None and read_uuid is not None:
+                self._slot_read_values[slot][read_uuid.lower()] = reply.read_value
+                self._app.set_read_value(read_uuid, reply.read_value)
+            if reply.notification is not None and notify_uuid is not None:
+                self._notify_slot(notify_uuid, reply.notification)
+            return
+        value = bytes(reply)
+        if (len(value) > 1 and not value[1] & 0x80 and
+                read_uuid is not None):
+            self._slot_read_values[slot][read_uuid.lower()] = value
+            self._app.set_read_value(read_uuid, value)
+        if notify_uuid is not None:
+            self._notify_slot(notify_uuid, value)
+
+    def _notify_slot(self, uuid: str, value: bytes) -> None:
+        """Notify only when this characteristic belongs to one virtual board.
+
+        BlueZ broadcasts a characteristic Value change to every subscribed
+        central and offers no destination option. Two Quantum instances share
+        fff1, so emitting it would leak one board's roster to the other. Their
+        device-scoped fff4 reads remain fully isolated and authoritative.
+        """
+        if self._notify_uuid_counts.get(uuid.lower(), 0) > 1:
+            logger.debug(
+                "Suppressing shared %s notification; use device-scoped read",
+                uuid)
+            return
+        self._app.notify(uuid, value)
+
+    def _read_for_device(self, device: str | None, uuid: str,
+                         fallback: bytes) -> bytes:
+        slot = self._slot_for_access(device)
+        if slot is None:
+            logger.warning("Reading shared GATT state without a board assignment")
+            return fallback
+        return self._slot_read_values[slot].get(uuid.lower(), fallback)
+
+    def _configure_read_callbacks(self, app) -> None:
+        for service in app.services:
+            for characteristic in service.characteristics:
+                if "read" in characteristic._flags:
+                    characteristic.read_callback = (
+                        lambda device, uuid=characteristic._uuid,
+                        fallback=bytes(characteristic._value):
+                        self._read_for_device(device, uuid, fallback))
 
     def _assign_device(self, device: str, slot: int) -> None:
         previous = self._assignments.get(device)
@@ -291,6 +386,8 @@ class MultiplexedBLEPeripheral:
             "org.bluez.Adapter1", "Discoverable", Variant("b", False))
 
         app = build_application(self._profile, self._handle_gatt_write)
+        self._app = app
+        self._configure_read_callbacks(app)
         gatt_mgr = adapter.get_interface(GATT_MANAGER_IFACE)
         registered = False
         monitor_task: asyncio.Task | None = None
@@ -378,3 +475,4 @@ class MultiplexedBLEPeripheral:
             except Exception:
                 pass
             self._bus.disconnect()
+            self._app = None

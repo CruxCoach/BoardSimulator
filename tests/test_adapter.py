@@ -130,10 +130,7 @@ def test_protocol_replies_are_forwarded_to_quantum_notify_characteristic() -> No
     sent: list[bytes] = []
 
     class NotifyApp:
-        def set_first_read_value(self, value: bytes) -> None:
-            pass
-
-        def notify_first(self, value: bytes) -> None:
+        def publish(self, value: bytes) -> None:
             sent.append(value)
 
     ble = peripheral.BLEPeripheral(

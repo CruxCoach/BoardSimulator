@@ -44,7 +44,7 @@ from ble.adapter import (
     normalize_adapter,
 )
 from ble.advertising import disable_extended_adv, set_extended_adv_data
-from ble.gatt import GattProfile, build_application
+from ble.gatt import GattProfile, GattUpdate, build_application
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +138,8 @@ class BLEPeripheral:
     """
 
     def __init__(self, ble_name: str, profile: GattProfile,
-                 on_data: Callable[[bytes], object],
+                 on_data: Callable[
+                     [bytes], list[GattUpdate | bytes] | bytes | None],
                  on_connect: Callable[[], None] | None = None,
                  on_disconnect: Callable[[], None] | None = None,
                  on_fatal: Callable[[BaseException], None] | None = None,
@@ -233,9 +234,7 @@ class BLEPeripheral:
         if isinstance(replies, (bytes, bytearray)):
             replies = [bytes(replies)]
         for reply in replies:
-            if len(reply) > 1 and not reply[1] & 0x80:
-                self._app.set_first_read_value(reply)
-            self._app.notify_first(reply)
+            self._app.publish(reply)
 
     def _owns_device_path(self, path: str) -> bool:
         """Whether this D-Bus path is a central on THIS peripheral's adapter.

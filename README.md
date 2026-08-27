@@ -325,15 +325,19 @@ GATT fragmentation and 92-diode chunks. Removed commands, 1.44's little-endian
 CRC/ASCII IDs and JSON remain isolated in the explicit legacy decoder. Errors
 never mutate the board; reconnect clears only a partial frame.
 
-The default response personality follows two real XL captures: accepted writes
-light the simulated wall, but do not invent a `fff1` echo and leave `fff4` at
-the controller-published empty snapshot. The original app's normal route-play
-duration is `0xffff`; this XL also lit finite-duration routes, but reported
-neither in its roster. Parser-compatible route snapshots remain available only
-through an explicitly synthetic protocol test policy. Fault profiles emit
-Modbus exceptions without mutating LEDs. The capture evidence, an observed
-`Invalid Handle` during a later route-list refresh, and the remaining hardware
-boundaries are documented in [the Quantum E2E guide](docs/quantum-e2e.md).
+Successful writes update the simulated route roster. The simulator publishes a
+parser-compatible event through `fff1` and keeps the authoritative `0x47`
+snapshot readable through `fff4`; the original app's normal route-play duration
+is `0xffff`. Multiplex mode keeps `fff4` state and `fff5` identity isolated per
+requesting device. If two Quantum instances share `fff1`, its notification is
+suppressed because BlueZ cannot address it to only one central; this prevents
+cross-board roster leaks while preserving each board's readable state. Fault
+profiles emit Modbus exceptions without mutating LEDs.
+
+These behaviours model the statically recovered eWalls 2.0.14 app contract.
+There is no physical Quantum hardware capture in the repository, so exact
+firmware responses and timing are deliberately not claimed. The evidence and
+remaining boundaries are documented in [the Quantum E2E guide](docs/quantum-e2e.md).
 
 ### Roles & colors (board-local!)
 

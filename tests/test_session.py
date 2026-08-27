@@ -194,12 +194,14 @@ class TestSessionDecoding:
             route_id="00112233-4455-6677-8899-aabbccddeeff",
             user_id="ffeeddcc-bbaa-9988-7766-554433221100",
             color="#010203", diodes=[1003]))
-        assert replies == []  # captured XL sends no automatic fff1 echo
+        assert len(replies) == 1
+        assert replies[0].notification[1:4] == b"\x41\x01\x00"
+        assert replies[0].read_value[1:4] == b"\x47\x01\x00"
         assert list(session.state.get_holds()) == [1003]
         session.disconnect()
         assert list(session.state.get_holds()) == [1003]
 
-    def test_quantum_success_does_not_publish_fff1_or_rewrite_fff4(self) -> None:
+    def test_quantum_success_publishes_fff1_and_authoritative_fff4(self) -> None:
         from ble.gatt import build_application
         from ble.peripheral import BLEPeripheral
         from protocols.quantum import (Command, EWALLS_ROUTE_DURATION_SECONDS,
@@ -227,8 +229,13 @@ class TestSessionDecoding:
         peripheral._handle_gatt_write(
             encode(Command.REQUEST_USER_ROUTE_LIST))
 
-        assert bytes(notify.Value) == b""
-        assert bytes(state.Value) == b"\x01\x47\x00\x00"
+        expected = bytes.fromhex(
+            "01470100"
+            "00112233445566778899aabbccddeeff"
+            "ffeeddccbbaa99887766554433221100"
+            "ffff010203")
+        assert bytes(notify.Value) == expected
+        assert bytes(state.Value) == expected
         assert list(session.state.get_holds()) == [1003]
 
     def test_moon_session_respects_variant_grid(self) -> None:

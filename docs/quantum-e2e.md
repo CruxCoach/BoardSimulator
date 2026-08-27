@@ -13,11 +13,9 @@ sudo venv/bin/python main.py --board quantum --layout xl
 CruxCoach should discover `QB_020000000001` (`QBB_…` for Belay), inspect GATT,
 select `0000fff2-0000-1000-8000-00805f9b34fb`, subscribe to `fff1`, read state
 at `fff4` and parse the 41-byte model identity from `fff5`, all below the
-current `ffe0` service (`fff0` remains the app's legacy fallback). The captured
-XL declared fff2 with the write-without-response property, while the Nokia
-actually sent ATT Write Requests and the controller returned ATT Write
-Responses. The simulator keeps the captured declaration; the mock client uses
-requests to exercise the observed Android path.
+current `ffe0` service (`fff0` remains the app's legacy fallback). The
+characteristic properties and payload formats come from the eWalls 2.0.14
+application, not from a capture of physical Quantum hardware.
 
 From a second BLE adapter or host:
 
@@ -48,62 +46,35 @@ five-byte route-list request), every current command, one-byte fragmentation,
 reconnect during a partial frame and isolation between sessions. Separate
 regressions pin 1.44's CRC little-endian, removed commands and legacy JSON.
 
-By default successful writes change the rendered LEDs but send no fff1 value
-and do not rewrite the initial empty fff4 snapshot. This is intentional: it is
-the behaviour observed below, and ATT write success is not a route-roster
-confirmation. `ProtocolEvent` remains an in-process diagnostic.
-
-Parser-compatible route snapshots are still available for isolated app tests,
-but are explicitly synthetic rather than the default hardware personality:
-
-```python
-QuantumProtocol(
-    on_action,
-    response_policy=ResponsePolicy.SYNTHETIC_STATE,
-)
-```
+By default successful writes update the rendered LEDs and the simulated route
+roster. The protocol returns a parser-compatible `fff1` event and an
+authoritative `0x47` snapshot for `fff4`; the BLE layer publishes both. A route
+uses eWalls' normal-play duration `0xffff`, which is statically recovered from
+the application. This is a compatibility model for the app contract, not a
+claim that every physical controller emits the same event or timing.
 
 CRC/payload failures and an explicit reject fault profile produce Modbus
 exception notifications without changing LED state. Those are deterministic
 fault-injection contracts, not claims about malformed-frame firmware behaviour.
 
-## Real XL evidence (2026-08-27)
+## Evidence boundary
 
-Two Nokia/Quantum-XL btsnooz captures were compared with eWalls 2.0.14's
-decompiled encoder and broadcast parser:
+No physical Quantum Board capture is currently available in this repository.
+The Nokia bug reports used during development captured traffic to this
+simulator. In particular, an ATT `Invalid Handle` in one report describes a
+stale simulator/BlueZ handle after its GATT database changed; it is not evidence
+about Quantum firmware. Exact controller response choice, latency, expiry and
+reconnect behaviour therefore remain unverified hardware details.
 
-| Event | Captured controller result |
-|---|---|
-| `TURN_OFF_USER` (`0x43`) | ATT Write Response; no fff1 notification |
-| `ACTIVATE_WALL` (`0x41`, 300 seconds) | ATT Write Response and physical LEDs on; fff4 remained `01 47 00 00` |
-| `ACTIVATE_WALL` (`0x41`, app default `0xffff`) | ATT Write Response and physical LEDs on; fff4 still remained `01 47 00 00` |
-| `REQUEST_ROUTE_LIST` (`0x47`) | normally ATT Write Response, then explicit fff4 read returned `01 47 00 00`; no fff1 notification |
+The implemented compatibility contract is limited to facts recovered from
+eWalls 2.0.14: command encodings, `0xffff` normal-play duration, the `fff1`
+broadcast parser and the readable `fff4`/`fff5` roles. Modbus exceptions are
+deterministic simulator fault injection, not a firmware-behaviour claim.
 
-The btsnooz recorder truncates long ACL payloads, so the captured `0x41` frame
-does not itself retain its duration bytes. `0xffff` is pinned independently by
-the exact CruxCoach build used for the second run and by eWalls 2.0.14's normal
-route-play generator. It is therefore an app encoder fact, not a general
-controller rule: both durations lit this XL and neither entered its roster.
-
-One later `0x47` request explains Android's reported GATT status `0x1`
-precisely. The phone sent an ATT Write Request to the formerly valid fff2 value
-handle `0x0146`; the controller returned `01 12 46 01 01`, an ATT Error
-Response for that request with `Invalid Handle`. After reconnect and service
-rediscovery, fff2 had moved to `0x0166` and fff4 to `0x016b`; requests succeeded
-again, but the roster remained empty. Thus the physical activation succeeded
-before the authoritative refresh failed.
-
-BlueZ assigns the simulator's attribute handles, so this dynamic real-device
-handle-generation/cache failure cannot be reproduced safely inside the
-protocol decoder. Reconnect is covered at the level the simulator controls:
-partial transport frames are discarded, rendered controller LED state is
-preserved, and the captured-XL fff4 snapshot stays empty. Client recovery from
-an ATT `Invalid Handle` needs a real GATT fault peripheral or hardware test.
-
-Observed turnaround was roughly 49 ms for the off write, 110 ms for the
-activation write, 135 ms for a route-list write and 138 ms for the following
-fff4 read in the representative run. These are measurements, not stable
-firmware timers, so the simulator does not bake in sleeps or retry constants.
+The original multiplex implementation called the selected session but dropped
+its returned GATT updates. That made successful commands illuminate the GUI
+while leaving `fff4` at `01 47 00 00` and `fff1` silent. Multiplex mode now
+publishes the returned update on the selected board's characteristics.
 
 ## Two isolated boards
 
@@ -115,7 +86,19 @@ sudo venv/bin/python main.py --instances 2 \
 
 Every advertising handle owns a separate session, frame accumulator, route
 state and editor state. A partial frame sent to one slot cannot complete in or
-mutate the other.
+mutate the other. `fff4` state and `fff5` identity reads are selected using
+BlueZ's requesting-device path, so two Quantum instances remain isolated even
+though their UUIDs are identical. BlueZ cannot target one characteristic
+notification at only one subscribed central. When both instances share
+`fff1`, the simulator suppresses that ambiguous notification rather than leak
+one board's roster to its neighbour; each device can still read its own
+authoritative `fff4` snapshot. A Quantum board paired with a different profile
+has a unique `fff1` and receives normal notifications.
+
+After updating a running simulator, stop the old process completely before
+starting the new one so BlueZ unregisters its previous GATT database. Reconnect
+the client and rediscover services; toggle client Bluetooth only if its OS kept
+stale attribute handles.
 
 ## Geometry regeneration
 

@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 
 import config
-from ble.gatt import CharacteristicSpec, GattProfile, ServiceSpec
+from ble.gatt import CharacteristicSpec, GattProfile, GattUpdate, ServiceSpec
 from board_state import AuroraBoardState, MoonBoardState, QuantumBoardState
 from boards import PROTOCOL_AURORA, PROTOCOL_MOONBOARD, PROTOCOL_QUANTUM, Board
 
@@ -130,7 +130,7 @@ class Session:
     gatt_profile: GattProfile
     window_title: str
 
-    def feed(self, data: bytes) -> None:
+    def feed(self, data: bytes) -> list[GattUpdate | bytes] | None:
         """Forward raw bytes from a GATT write to the protocol decoder."""
         raise NotImplementedError
 
@@ -271,11 +271,10 @@ class MoonSession(Session):
 
 
 class QuantumSession(Session):
-    """Quantum Board using the response behaviour captured from a real XL.
+    """Quantum Board compatibility session for the eWalls 2.0.14 contract.
 
-    Valid commands update the rendered LEDs, while fff4 remains the last
-    controller-published snapshot (initially empty) and fff1 stays silent.
-    Protocol fault injection can still publish Modbus exception notifications.
+    Valid commands update rendered LEDs and return parser-compatible fff1/fff4
+    state. Exact physical-controller response behaviour remains unverified.
     """
 
     def __init__(self, board: Board, variant) -> None:
@@ -304,7 +303,7 @@ class QuantumSession(Session):
         )
         self.window_title = f"Quantum Board Simulator — {variant.display_name}"
 
-    def feed(self, data: bytes) -> list[bytes]:
+    def feed(self, data: bytes) -> list[GattUpdate | bytes]:
         return self._decoder.feed(data)
 
     def connection_lost(self) -> None:

@@ -153,9 +153,8 @@ async def main() -> None:
             characteristic = (QUANTUM_WRITE_UUID
                               if board.protocol == PROTOCOL_QUANTUM
                               else RX_CHARACTERISTIC_UUID)
-            # The real fff2 declaration advertises write-without-response, but
-            # the Nokia/XL captures show Android using ATT Write Request and
-            # receiving Write Response. Exercise that observed app path.
+            # CruxCoach currently uses a write request for Quantum. Exercise
+            # that transport choice without treating it as a hardware claim.
             await client.write_gatt_char(
                 characteristic, chunk,
                 response=(board.protocol == PROTOCOL_QUANTUM))
@@ -165,12 +164,13 @@ async def main() -> None:
         await asyncio.sleep(3.0)
         if board.protocol == PROTOCOL_QUANTUM:
             state = bytes(await client.read_gatt_char(QUANTUM_STATE_UUID))
-            if state != b"\x01\x47\x00\x00":
-                raise RuntimeError(f"unexpected captured-XL fff4 state: {state.hex()}")
-            if notifications:
-                raise RuntimeError(
-                    f"unexpected automatic fff1 echo: {notifications[-1].hex()}")
-            logger.info("Captured-XL response matched: fff1 silent, fff4 empty")
+            route = bytes.fromhex("00112233445566778899aabbccddeeff")
+            if state[1:4] != b"\x47\x01\x00" or route not in state:
+                raise RuntimeError(f"unexpected fff4 route state: {state.hex()}")
+            if not notifications or notifications[-1][1:4] != b"\x41\x01\x00":
+                seen = notifications[-1].hex() if notifications else "none"
+                raise RuntimeError(f"missing fff1 activation event: {seen}")
+            logger.info("Stateful Quantum response matched: fff1 event + fff4 roster")
 
     logger.info("Disconnected.")
 

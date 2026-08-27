@@ -7,6 +7,7 @@ import json
 import pytest
 
 from board_state import QuantumBoardState
+from ble.gatt import GattUpdate
 from protocols.quantum import (CHUNK_LIMITS, CURRENT_COMMANDS, Command,
                                EWALLS_ROUTE_DURATION_SECONDS, ProtocolEvent,
                                QuantumProtocol, ResponsePolicy, WireVersion,
@@ -40,7 +41,7 @@ GOLDEN = {
 
 
 def make_protocol(addresses=tuple(range(1000)), reject=None,
-                  response_policy=ResponsePolicy.OBSERVED_XL):
+                  response_policy=ResponsePolicy.STATEFUL):
     state = QuantumBoardState(addresses)
     events: list[ProtocolEvent] = []
     protocol = QuantumProtocol(
@@ -249,37 +250,39 @@ def test_current_multi_chunk_crc_error_and_recovery() -> None:
 
 
 def test_current_broadcast_shapes_match_2014_parser_contract() -> None:
-    protocol, _state, _events = make_protocol(
-        response_policy=ResponsePolicy.SYNTHETIC_STATE)
+    protocol, _state, _events = make_protocol()
     replies = protocol.feed(quantum_encode(
         Command.ACTIVATE_WALL, route_id=ROUTE_UUID, user_id=USER_UUID,
         color="#123456", duration=42, diodes=[1]))
-    assert replies == [bytes.fromhex(
+    assert replies[0].notification == bytes.fromhex(
         "01410100" + ROUTE_UUID.replace("-", "") + USER_UUID.replace("-", "")
-        + "002a123456")]
+        + "002a123456")
+    assert replies[0].read_value == bytes.fromhex(
+        "01470100" + ROUTE_UUID.replace("-", "") + USER_UUID.replace("-", "")
+        + "002a123456")
     assert encode_broadcast(protocol._decode(  # parser-independent shape check
         quantum_encode(Command.REQUEST_USER_ROUTE_LIST),
         Command.REQUEST_USER_ROUTE_LIST, WireVersion.EWALLS_2_0_14)) == b"\x01\x47\x00\x00"
 
 
 def test_route_list_snapshot_survives_reconnect_and_is_session_local() -> None:
-    first, _state, _events = make_protocol(
-        response_policy=ResponsePolicy.SYNTHETIC_STATE)
-    second, _other_state, _other_events = make_protocol(
-        response_policy=ResponsePolicy.SYNTHETIC_STATE)
+    first, _state, _events = make_protocol()
+    second, _other_state, _other_events = make_protocol()
     first.feed(quantum_encode(
         Command.ACTIVATE_WALL, route_id=ROUTE_UUID, user_id=USER_UUID,
         color="#010203", duration=30, diodes=[1]))
     first.reset_transport()
-    snapshot = first.feed(quantum_encode(Command.REQUEST_USER_ROUTE_LIST))[0]
-    empty = second.feed(quantum_encode(Command.REQUEST_USER_ROUTE_LIST))[0]
+    snapshot = first.feed(
+        quantum_encode(Command.REQUEST_USER_ROUTE_LIST))[0].read_value
+    empty = second.feed(
+        quantum_encode(Command.REQUEST_USER_ROUTE_LIST))[0].read_value
     assert snapshot[1:4] == b"\x47\x01\x00"
     assert len(snapshot) == 41
     assert empty == b"\x01\x47\x00\x00"
 
 
-def test_observed_xl_accepts_commands_without_inventing_state_replies() -> None:
-    protocol, state, events = make_protocol()
+def test_explicit_silent_fault_personality_suppresses_state_replies() -> None:
+    protocol, state, events = make_protocol(response_policy=ResponsePolicy.SILENT)
     frames = [
         quantum_encode(Command.TURN_OFF_BY_USER, user_id=USER_UUID),
         quantum_encode(
@@ -298,8 +301,9 @@ def test_observed_xl_accepts_commands_without_inventing_state_replies() -> None:
     ]
 
 
-def test_observed_xl_reconnect_preserves_leds_but_not_a_synthetic_roster() -> None:
-    protocol, state, _events = make_protocol()
+def test_silent_fault_personality_reconnect_does_not_build_roster() -> None:
+    protocol, state, _events = make_protocol(
+        response_policy=ResponsePolicy.SILENT)
     protocol.feed(quantum_encode(
         Command.ACTIVATE_WALL, route_id=ROUTE_UUID, user_id=USER_UUID,
         duration=EWALLS_ROUTE_DURATION_SECONDS, diodes=[1]))
@@ -312,7 +316,7 @@ def test_observed_xl_reconnect_preserves_leds_but_not_a_synthetic_roster() -> No
         quantum_encode(Command.REQUEST_USER_ROUTE_LIST)) == []
 
 
-def test_observed_xl_fault_injection_still_reports_modbus_exception() -> None:
+def test_fault_injection_still_reports_modbus_exception() -> None:
     protocol, state, events = make_protocol(reject={Command.ACTIVATE_WALL})
     replies = protocol.feed(quantum_encode(
         Command.ACTIVATE_WALL, route_id=ROUTE_UUID, user_id=USER_UUID,
@@ -321,6 +325,21 @@ def test_observed_xl_fault_injection_still_reports_modbus_exception() -> None:
     assert replies == [encode_exception(Command.ACTIVATE_WALL, 4)]
     assert state.get_holds() == {}
     assert events[-1].code == "SLAVE_DEVICE_FAILURE"
+
+
+def test_stateful_user_off_updates_notification_and_authoritative_snapshot() -> None:
+    protocol, _state, _events = make_protocol()
+    protocol.feed(quantum_encode(
+        Command.ACTIVATE_WALL, route_id=ROUTE_UUID, user_id=USER_UUID,
+        duration=EWALLS_ROUTE_DURATION_SECONDS, diodes=[1]))
+
+    (reply,) = protocol.feed(quantum_encode(
+        Command.TURN_OFF_BY_USER, user_id=USER_UUID))
+
+    assert isinstance(reply, GattUpdate)
+    assert reply.notification == bytes.fromhex(
+        "0143" + USER_UUID.replace("-", "") + "000000")
+    assert reply.read_value == b"\x01\x47\x00\x00"
 
 
 @pytest.mark.parametrize("code", sorted({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 254}))

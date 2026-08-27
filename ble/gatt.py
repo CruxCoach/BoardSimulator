@@ -62,6 +62,19 @@ class GattProfile:
     services: tuple[ServiceSpec, ...] = field(default_factory=tuple)
 
 
+@dataclass(frozen=True)
+class GattUpdate:
+    """One protocol result with independent notify and readable state data.
+
+    Quantum controllers expose asynchronous events on fff1 and an
+    authoritative snapshot on fff4. Keeping those channels separate prevents
+    a user-off event from replacing the readable route-list snapshot.
+    """
+
+    notification: bytes | None = None
+    read_value: bytes | None = None
+
+
 # ---------------------------------------------------------------------------
 # D-Bus GATT objects (BlueZ reads these through GetManagedObjects)
 # ---------------------------------------------------------------------------
@@ -78,6 +91,7 @@ class GattCharacteristic(ServiceInterface):
         self._value = bytearray(initial_value)
         self._notifying = False
         self.write_callback: Callable[[bytes, str | None], None] | None = None
+        self.read_callback: Callable[[str | None], bytes] | None = None
         super().__init__("org.bluez.GattCharacteristic1")
 
     @dbus_property(access=PropertyAccess.READ)
@@ -102,6 +116,10 @@ class GattCharacteristic(ServiceInterface):
 
     @method()
     def ReadValue(self, options: "a{sv}") -> "ay":  # type: ignore  # noqa: N802
+        if self.read_callback:
+            device_option = options.get("device")
+            device = getattr(device_option, "value", device_option)
+            return bytearray(self.read_callback(str(device) if device else None))
         return self._value
 
     @method()
@@ -208,6 +226,35 @@ class GattApplication(ServiceInterface):
                     characteristic._value = bytearray(value)
                     return True
         return False
+
+    def set_read_value(self, characteristic_uuid: str, value: bytes) -> bool:
+        """Update one specifically named readable characteristic."""
+        wanted = characteristic_uuid.lower()
+        for service in self.services:
+            for characteristic in service.characteristics:
+                if (characteristic._uuid.lower() == wanted and
+                        "read" in characteristic._flags):
+                    characteristic._value = bytearray(value)
+                    return True
+        return False
+
+    def publish(self, update: GattUpdate | bytes | bytearray) -> None:
+        """Publish one decoder result to its intended GATT channels.
+
+        Bare bytes retain the older fault/legacy convention. New stateful
+        protocols should return :class:`GattUpdate` so a notification is not
+        accidentally installed as the readable snapshot as well.
+        """
+        if isinstance(update, GattUpdate):
+            if update.read_value is not None:
+                self.set_first_read_value(update.read_value)
+            if update.notification is not None:
+                self.notify_first(update.notification)
+            return
+        value = bytes(update)
+        if len(value) > 1 and not value[1] & 0x80:
+            self.set_first_read_value(value)
+        self.notify_first(value)
 
 
 def build_application(profile: GattProfile,

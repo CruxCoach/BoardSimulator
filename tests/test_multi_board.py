@@ -6,7 +6,8 @@ from dbus_fast import Variant
 
 from ble import advertising
 from ble.gatt import (CharacteristicSpec, GattCharacteristic, GattProfile,
-                      ServiceSpec, merge_profiles)
+                      GattUpdate, ServiceSpec, build_application,
+                      merge_profiles)
 from ble.multiplex import MultiplexedBLEPeripheral, VirtualBoard
 
 
@@ -166,6 +167,139 @@ def test_each_device_is_routed_to_the_board_it_connected_through() -> None:
         "/org/bluez/hci0/dev_AA": 0,
         "/org/bluez/hci0/dev_BB": 1,
     }
+
+
+def test_two_quantum_instances_keep_fff4_and_fff5_device_scoped() -> None:
+    import config
+    from boards import board_for
+    from protocols.quantum import (Command, EWALLS_ROUTE_DURATION_SECONDS,
+                                   encode)
+    from protocols.session import create_session
+
+    board = board_for("quantum")
+    xl = create_session(board, board.variant_for("xl"), None, None, None)
+    small = create_session(board, board.variant_for("s"), None, None, None)
+    mux = MultiplexedBLEPeripheral([
+        VirtualBoard("xl", xl.ble_name, xl.gatt_profile, xl.feed),
+        VirtualBoard("s", small.ble_name, small.gatt_profile, small.feed),
+    ])
+    app = build_application(mux._profile, mux._handle_gatt_write)
+    mux._app = app
+    mux._configure_read_callbacks(app)
+    chars = {
+        char._uuid: char
+        for service in app.services
+        for char in service.characteristics
+    }
+    state = chars[config.QUANTUM_STATE_UUID]
+    identity = chars[config.QUANTUM_CONFIG_UUID]
+    notify = chars[config.QUANTUM_NOTIFY_UUID]
+    xl_device = "/org/bluez/hci0/dev_AA_00_00_00_00_01"
+    small_device = "/org/bluez/hci0/dev_BB_00_00_00_00_02"
+
+    from ble.hci_monitor import AdvertisingConnection
+    mux._handle_hci_event(AdvertisingConnection(
+        1, 0x40, "AA:00:00:00:00:01"))
+    mux._handle_hci_event(AdvertisingConnection(
+        2, 0x41, "BB:00:00:00:00:02"))
+
+    # Identity reads may be the first GATT access. They must consume the
+    # matching pending advertising assignment without needing a prior write.
+    assert identity.read_callback is not None
+    xl_identity = identity.read_callback(xl_device)
+    small_identity = identity.read_callback(small_device)
+    assert xl_identity[34] == 0
+    assert small_identity[34] == 2
+
+    xl_route = "00112233-4455-6677-8899-aabbccddeeff"
+    small_route = "10213243-5465-7687-98a9-bacbdcedfe0f"
+    user = "ffeeddcc-bbaa-9988-7766-554433221100"
+    mux._handle_gatt_write(encode(
+        Command.ACTIVATE_WALL, route_id=xl_route, user_id=user,
+        color="#010203", duration=EWALLS_ROUTE_DURATION_SECONDS,
+        diodes=[1003]), xl_device)
+    mux._handle_gatt_write(encode(
+        Command.ACTIVATE_WALL, route_id=small_route, user_id=user,
+        color="#a0b0c0", duration=EWALLS_ROUTE_DURATION_SECONDS,
+        diodes=[1003]), small_device)
+
+    assert state.read_callback is not None
+    xl_state = state.read_callback(xl_device)
+    small_state = state.read_callback(small_device)
+    assert xl_state[1:4] == b"\x47\x01\x00"
+    assert small_state[1:4] == b"\x47\x01\x00"
+    assert bytes.fromhex(xl_route.replace("-", "")) in xl_state
+    assert bytes.fromhex(small_route.replace("-", "")) not in xl_state
+    assert bytes.fromhex(small_route.replace("-", "")) in small_state
+    assert bytes.fromhex(xl_route.replace("-", "")) not in small_state
+    # BlueZ cannot target a Value notification to one central. Shared fff1 is
+    # deliberately silent rather than leaking a neighbouring board's roster;
+    # each board's authoritative fff4 remains available and isolated.
+    assert bytes(notify.Value) == b""
+
+
+def test_multiplex_forwards_replies_to_the_selected_profiles_characteristics() -> None:
+    import config
+    from boards import board_for
+    from protocols.quantum import (Command, EWALLS_ROUTE_DURATION_SECONDS,
+                                   encode)
+    from protocols.session import create_session
+
+    quantum_board = board_for("quantum")
+    quantum = create_session(
+        quantum_board, quantum_board.variant_for("xl"), None, None, None)
+    other_profile = GattProfile(
+        description="distinct reply profile", advertised_uuid="bbbb",
+        services=(ServiceSpec("service-b", (
+            CharacteristicSpec("other-write", ("write",), True),
+            CharacteristicSpec("other-notify", ("notify",)),
+            CharacteristicSpec("other-read", ("read",), initial_value=b"old"),
+        )),),
+    )
+    mux = MultiplexedBLEPeripheral([
+        VirtualBoard("quantum", quantum.ble_name,
+                     quantum.gatt_profile, quantum.feed),
+        VirtualBoard("other", "Other", other_profile,
+                     lambda _data: [GattUpdate(b"other-event", b"other-state")]),
+    ])
+    app = build_application(mux._profile, mux._handle_gatt_write)
+    mux._app = app
+    mux._configure_read_callbacks(app)
+    chars = {
+        char._uuid: char
+        for service in app.services
+        for char in service.characteristics
+    }
+    quantum_device = "/org/bluez/hci0/dev_AA_00_00_00_00_01"
+    other_device = "/org/bluez/hci0/dev_BB_00_00_00_00_02"
+
+    from ble.hci_monitor import AdvertisingConnection
+    mux._handle_hci_event(AdvertisingConnection(
+        1, 0x40, "AA:00:00:00:00:01"))
+    mux._handle_hci_event(AdvertisingConnection(
+        2, 0x41, "BB:00:00:00:00:02"))
+
+    route = "00112233-4455-6677-8899-aabbccddeeff"
+    mux._handle_gatt_write(encode(
+        Command.ACTIVATE_WALL, route_id=route,
+        user_id="ffeeddcc-bbaa-9988-7766-554433221100",
+        color="#010203", duration=EWALLS_ROUTE_DURATION_SECONDS,
+        diodes=[1003]), quantum_device)
+
+    assert bytes(chars[config.QUANTUM_NOTIFY_UUID].Value)[1:4] == b"\x41\x01\x00"
+    assert bytes.fromhex(route.replace("-", "")) in (
+        chars[config.QUANTUM_STATE_UUID].read_callback(quantum_device))
+    assert bytes(chars["other-notify"].Value) == b""
+    assert chars["other-read"].read_callback(other_device) == b"old"
+
+    mux._handle_gatt_write(b"payload", other_device)
+
+    assert bytes(chars["other-notify"].Value) == b"other-event"
+    assert chars["other-read"].read_callback(other_device) == b"other-state"
+    # The neighbour's reply must not overwrite Quantum state or notification.
+    assert bytes(chars[config.QUANTUM_NOTIFY_UUID].Value)[1:4] == b"\x41\x01\x00"
+    assert bytes.fromhex(route.replace("-", "")) in (
+        chars[config.QUANTUM_STATE_UUID].read_callback(quantum_device))
 
 
 def test_single_client_mode_reenables_only_after_disconnect() -> None:

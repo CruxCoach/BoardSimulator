@@ -1,10 +1,4 @@
-"""Clean-room Quantum binary protocols (2.0.14 default, 1.44 legacy).
-
-The default response policy follows the captured Quantum XL controller: a
-successful ATT write changes the LEDs, but does not imply an application-level
-``fff1`` echo or a changed ``fff4`` route roster.  Parser-shaped state replies
-remain available as an explicitly synthetic app-test policy.
-"""
+"""Clean-room Quantum binary protocols (2.0.14 default, 1.44 legacy)."""
 
 from __future__ import annotations
 
@@ -14,6 +8,8 @@ import struct
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 from typing import Callable, Iterable
+
+from ble.gatt import GattUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +35,10 @@ class WireVersion(str, Enum):
 
 
 class ResponsePolicy(str, Enum):
-    """Controller response behaviour selected independently of wire syntax."""
+    """Response behaviour selected independently of wire syntax."""
 
-    OBSERVED_XL = "observed-xl"
-    SYNTHETIC_STATE = "synthetic-state"
+    STATEFUL = "stateful"
+    SILENT = "silent"
 
 
 CURRENT_COMMANDS = frozenset({
@@ -70,9 +66,8 @@ EXCEPTION_CODES = {
     254: "WRITE_ACK_TIMEOUT",
 }
 
-# eWalls 2.0.14's normal route-play path passes 0xffff.  This is an app-side
-# default recovered from the original implementation, not a firmware rule:
-# the captured XL lit both 300-second and 0xffff routes but kept fff4 empty.
+# eWalls 2.0.14's normal route-play path passes 0xffff. This is statically
+# recovered from the original implementation; no real-hardware capture exists.
 EWALLS_ROUTE_DURATION_SECONDS = 0xFFFF
 
 
@@ -208,11 +203,7 @@ def encode_exception(command: Command | int, code: int) -> bytes:
 
 def encode_broadcast(action: QuantumAction,
                      players: Iterable[QuantumAction] | None = None) -> bytes | None:
-    """Encode synthetic state matching eWalls 2.0.14 ``parseBroadcast``.
-
-    This describes what the original app can parse.  It is not evidence that a
-    real controller echoes every accepted command; the captured XL does not.
-    """
+    """Encode state matching eWalls 2.0.14 ``parseBroadcast``."""
     cmd = action.command
     if cmd in (Command.ACTIVATE_WALL, Command.BOARD_SWIPE):
         active = list(players) if players is not None else [action]
@@ -246,7 +237,7 @@ class QuantumProtocol:
                  on_event: Callable[[ProtocolEvent], None] | None = None,
                  reject_commands: set[Command] | None = None,
                  reject_code: int = 4,
-                 response_policy: ResponsePolicy = ResponsePolicy.OBSERVED_XL) -> None:
+                 response_policy: ResponsePolicy = ResponsePolicy.STATEFUL) -> None:
         self.on_action = on_action
         self.on_event = on_event
         self.reject_commands = reject_commands or set()
@@ -271,8 +262,8 @@ class QuantumProtocol:
         (logger.debug if ok else logger.warning)(
             "Quantum %s %s", code, detail or (command.name if command else ""))
 
-    def feed(self, data: bytes | bytearray) -> list[bytes]:
-        replies: list[bytes] = []
+    def feed(self, data: bytes | bytearray) -> list[GattUpdate | bytes]:
+        replies: list[GattUpdate | bytes] = []
         if not data:
             return replies
         if self._json_buffer or bytes(data).lstrip().startswith((b"{", b"[")):
@@ -323,11 +314,13 @@ class QuantumProtocol:
             self.on_action(action)
             self._event(True, "ACK", command)
             if (wire is WireVersion.EWALLS_2_0_14 and
-                    self.response_policy is ResponsePolicy.SYNTHETIC_STATE):
+                    self.response_policy is ResponsePolicy.STATEFUL):
                 self._track_players(action)
-                reply = encode_broadcast(action, self._players.values())
-                if reply is not None:
-                    replies.append(reply)
+                notification = encode_broadcast(action, self._players.values())
+                snapshot = encode_broadcast(
+                    QuantumAction(Command.REQUEST_USER_ROUTE_LIST),
+                    self._players.values())
+                replies.append(GattUpdate(notification, snapshot))
         return replies
 
     def _track_players(self, action: QuantumAction) -> None:
