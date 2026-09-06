@@ -50,6 +50,12 @@ public final class MainActivity extends Activity {
         if(!running){profiles[slot]=null;if(profiles[0]==null&&profiles[1]==null)restoreName();if(busySlot==slot)ready(slot);}
     }
     public void disconnected(int slot, String peer) { web.evaluateJavascript("BLE.disconnected("+JSONObject.quote(peer)+","+slot+")", null); }
+    boolean ownedByOther(int slot, android.bluetooth.BluetoothDevice device) {
+        return peripherals[1-slot].owns(device);
+    }
+    void refreshAdvertising() {
+        for(Peripheral peripheral:peripherals)peripheral.refreshAdvertising();
+    }
     public void receive(int slot, int token, String peer, byte[] data, java.util.function.Consumer<JSONArray> completion) {
         JSONArray bytes = new JSONArray(); for (byte b : data) bytes.put(b & 255);
         web.evaluateJavascript("BLE.receive(" + bytes + ","+JSONObject.quote(peer)+","+token+","+slot+")", value -> {

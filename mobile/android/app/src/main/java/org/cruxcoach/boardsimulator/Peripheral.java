@@ -60,11 +60,18 @@ final class Peripheral {
     void setMultiplexed(boolean enabled) { multiplexed=enabled; }
     private void status(String message,boolean running) {activity.status(slot,message,running);}
     private long assignedCount(){return links.values().stream().filter(l->l.assigned).count();}
+    boolean owns(BluetoothDevice device) {
+        Link link=links.get(device);
+        return link!=null && link.assigned;
+    }
+    void refreshAdvertising() {
+        try {syncAdvertising();} catch(Exception e) {fail(e.getMessage());}
+    }
     private boolean assign(BluetoothDevice device) {
         Link link=links.get(device);
         if(link==null){link=new Link(device);links.put(device,link);}
         if(!link.assigned && !multi && assignedCount()>0)return false;
-        link.assigned=true;syncAdvertising();return true;
+        link.assigned=true;activity.refreshAdvertising();return true;
     }
     static byte[] bytes(JSONArray a) throws JSONException {
         byte[] b = new byte[a.length()]; for(int i=0;i<b.length;i++) b[i]=(byte)a.getInt(i); return b;
@@ -132,12 +139,18 @@ final class Peripheral {
     }
     private void syncAdvertising() {
         if(!servicesReady)return;
-        boolean wanted=multi || assignedCount()==0;
+        // Android reports the shared link before the selected GATT endpoint.
+        // Never keep an exclusive board discoverable while waiting for a write.
+        boolean unresolved=links.values().stream().anyMatch(link ->
+                !link.assigned && !activity.ownedByOther(slot,link.device));
+        boolean wanted=AdvertisingPolicy.shouldAdvertise(multi,assignedCount()>0,unresolved);
         if(advertisingSet!=null) {
             if(wanted!=advertisementEnabled) {
                 advertisementEnabled=wanted;advertisingSet.enableAdvertising(wanted,0,0);
             }
-            if(!wanted)status("Exclusive: "+assignedCount()+" controller(s) · advertising stopped"+(multiplexed?" after GATT access; address assignment unavailable":""),true);
+            status((wanted?"Advertising ":"Advertising paused: ")+desiredName+
+                    (multi?" · multi-connect":" · exclusive")+
+                    (!wanted&&unresolved?" · awaiting board access":" · "+assignedCount()+" controller(s)"),true);
             return;
         }
         if(advertising!=null)return;
@@ -155,7 +168,7 @@ final class Peripheral {
                 if(result!=ADVERTISE_SUCCESS){fail("Advertising mode update failed "+result);return;}
                 // A callback can describe an older queued enable request; current
                 // desired state remains authoritative and was queued in order.
-                status((enabled?"Advertising ":"Advertising stopped: ")+desiredName+" · "+assignedCount()+" controller(s)",true);
+                syncAdvertising();
             }
         };
         // Create each set once while its adapter name is selected. Exclusive

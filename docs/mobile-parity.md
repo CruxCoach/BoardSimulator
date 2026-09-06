@@ -21,7 +21,7 @@ mobile code and distinguishes implementation from physical validation.
 | Two Aurora, two Moon, Aurora+Moon | HCI-to-advertiser routing | **Unfulfilled**; duplicate/overlapping profiles rejected | **Unfulfilled**; duplicate/overlapping profiles rejected |
 | Two Quantum | Isolated reads; shared-UUID notify suppressed | **Unfulfilled**; duplicate profiles rejected | **Unfulfilled**; duplicate profiles rejected |
 | Exclusive, one board | Stops advertising on connection; resumes on disconnect | Implemented with real connection callbacks and retained advertising set | **Partial**: stop at first ATT access; no generic peripheral disconnect callback; manual resume required |
-| Exclusive, two disjoint boards | Per-advertiser connection assignment | **Partial/experimental**: assignment at that server's GATT access, not connection event | **Partial/experimental**: assignment at ATT access, manual resume |
+| Exclusive, two disjoint boards | Per-advertiser connection assignment | **Partial/experimental**: exclusive advertising pauses on connection while assignment is unresolved; unused endpoints resume after another board receives ATT access | **Partial/experimental**: assignment at ATT access, manual resume |
 | Multi-connect | Advertising stays enabled; baseline has one decoder per board | Separate mode; per-controller streaming buffers, shared board state | Separate mode; per-central streaming buffers, shared board state |
 | Independent fragment streams | Baseline callback lacks peer argument to session | Interleaving/reset/roster tests pass | Same shared tests pass |
 | Foreground lifecycle | Persistent root / explicit shutdown | Background stops endpoints | Background stops managers |
@@ -136,3 +136,21 @@ on the specified phones remains unfulfilled. Options are:
 No option above is silently selected. The present deliverable remains partial
 until the missing routing/identity/lifecycle behavior is verified and implemented
 or the user explicitly accepts a changed requirement.
+
+## Android exclusive advertising correction
+
+Exclusive endpoints now pause advertising on the connection callback even before
+an ATT request identifies the selected board. During this unresolved interval,
+all exclusive endpoints that observe the link can be hidden. Once ATT access
+assigns the peer, an unused endpoint can resume; a board with its own assigned
+peer remains hidden. Multi-connect endpoints remain advertised intentionally.
+This conservative pause does not provide a missing advertiser-to-link identity
+mapping or prove independent over-the-air discovery on Android.
+
+Changing connection mode updates the status immediately. Existing connections
+are not forcibly evicted when switching from multi-connect to exclusive.
+CruxCoach 0.2.2 can remember an earlier positive observation of advertising while
+connected; changing the simulator cannot clear that controller-side memory.
+Validate a fresh discovery/identity and actual advertising, not only a previously
+cached capacity label. An external controller is required to validate the native
+connection-time pause; local unit tests cover the decision policy only.
