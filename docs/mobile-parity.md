@@ -11,6 +11,7 @@ mobile code and distinguishes implementation from physical validation.
 | Aurora API 2/3, board-local colors | Python decoder and role resolver | Shared conformance-tested decoder/palettes | Identical shared decoder/palettes |
 | MoonBoard, five variants | ASCII, split frames, clear, aux semantics | Same tested semantics/maps | Same tested semantics/maps |
 | Quantum XL/L/M/S/Belay | Binary 2.0.14/1.44, JSON, layers, roster | Same tested semantics, reads/targeted notifications | Same tested semantics, reads/targeted notifications |
+| Aurora serial identity | CLI serial | Editable 1–8 alphanumeric characters | Same control; advertising space limits remain |
 | Accurate images/coordinates | DBs, maps, calibrated Quantum transform | Byte-identical assets, exported transforms | Byte-identical assets, exported transforms |
 | Resizing/display | Tk, headless; multi panels | Responsive canvas per panel | Responsive canvas per panel |
 | Runtime board/layout/size/API change | Rebuild session/peripheral | Rebuild selected endpoint; generation guards drop old writes | Rebuild selected endpoint; generation guards drop old writes |

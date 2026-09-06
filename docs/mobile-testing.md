@@ -99,7 +99,7 @@ Python-vs-JavaScript conformance, not proof of official-app interoperability.
 ## Physical validation matrix
 
 A Nokia 6.1 running Android 15/API 35 was available over ADB during implementation.
-The debug APK installed and cold-launched successfully. The normal Nearby devices
+The earlier single-board debug APK installed and cold-launched successfully; this is historical evidence, not validation of the current parallel/multi-connect implementation. The normal Nearby devices
 permission flow, Bluetooth-off error and successful Kilter advertising callback
 were observed. An external central then sent five complete Aurora API 3 climbs
 fragmented across 20-byte writes: 10, 12, 8, 12 and 9 holds. The live view reported
@@ -138,7 +138,7 @@ For each configuration:
    users/routes, swipe/remove one, read fff4 with offsets, clear. Repeat at default
    MTU to confirm the visible notification-size limitation and readable state.
 6. Attempt a second controller; verify ownership limit rather than mixed streams.
-7. Rotate/resize, background, return, switch boards using Stop/select/Start.
+7. Rotate/resize, background, return, switch boards using runtime selection.
    Verify old services are removed and Android's prior adapter name restored.
 8. Repeat using official apps; scanner behavior is an independent acceptance gate.
 

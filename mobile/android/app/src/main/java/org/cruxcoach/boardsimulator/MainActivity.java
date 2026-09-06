@@ -54,13 +54,13 @@ public final class MainActivity extends Activity {
         JSONArray bytes = new JSONArray(); for (byte b : data) bytes.put(b & 255);
         web.evaluateJavascript("BLE.receive(" + bytes + ","+JSONObject.quote(peer)+","+token+","+slot+")", value -> {
             try { completion.accept(new JSONArray(value)); }
-            catch (Exception e) { status(slot,"Decoder failure: " + e.getMessage(), false); peripherals[slot].stop(); }
+            catch (Exception e) { peripherals[slot].stop();status(slot,"Decoder failure: " + e.getMessage(), false); }
         });
     }
     public void readState(int slot, java.util.function.Consumer<byte[]> completion) {
         web.evaluateJavascript("BLE.readState("+slot+")", value -> {
             try { completion.accept(Peripheral.bytes(new JSONArray(value))); }
-            catch (Exception e) { status(slot,"State read failure: " + e.getMessage(), false); peripherals[slot].stop(); }
+            catch (Exception e) { peripherals[slot].stop();status(slot,"State read failure: " + e.getMessage(), false); }
         });
     }
     private void start(int slot, JSONObject profile) {
@@ -133,7 +133,7 @@ public final class MainActivity extends Activity {
                         case "connections": modes[slot]=message.optBoolean("multi"); peripherals[slot].setMulti(modes[slot]); break;
                         case "instances": stopAll(); instances=message.getInt("count");if(instances<1||instances>2)throw new IllegalArgumentException("Invalid count");for(Peripheral p:peripherals)p.setMultiplexed(instances==2);break;
                         case "probe": startActivity(new android.content.Intent(MainActivity.this,RoutingProbeActivity.class)); break;
-                        case "stop": peripherals[slot].stop(); status(slot,"Stopped", false); break;
+                        case "stop": {final int target=slot;starts.removeIf(r->r.optInt("slot")==target);peripherals[slot].stop();status(slot,"Stopped",false);break;}
                         case "copy": ((ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("BoardSimulator", message.getString("text"))); break;
                         case "ready": web.evaluateJavascript("BLE.canProbe()",null); status(slot,"Android " + Build.VERSION.RELEASE + " · Start to check advertiser support", false); break;
                         default: throw new IllegalArgumentException("Unknown bridge command");

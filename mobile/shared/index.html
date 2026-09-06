@@ -9,6 +9,7 @@
 <section class="controls">
 <label>Board<select id="board"></select></label><label>Layout<select id="layout"></select></label>
 <label>Size<select id="size"></select></label><label id="apiLabel">Aurora API<select id="api"><option>3</option><option>2</option></select></label>
+<label id="serialLabel">Aurora serial<input id="serial" value="0001" pattern="[A-Za-z0-9]{1,8}" maxlength="8" required></label>
 <label>Connections<select id="connections"><option value="single">Exclusive</option><option value="multi">Multi-connect</option></select></label>
 <button id="start">Start BLE</button><button id="stop">Stop</button><button id="resume" hidden>Resume advertising after disconnect</button></section>
 <p id="identity"></p><p id="capability">Independent state per board; controller fragment buffers are isolated. Duplicate/overlapping GATT profiles are rejected.</p>

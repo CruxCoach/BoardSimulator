@@ -62,7 +62,7 @@ final class Peripheral {
     private long assignedCount(){return links.values().stream().filter(l->l.assigned).count();}
     private boolean assign(BluetoothDevice device) {
         Link link=links.get(device);
-        if(link==null)return false;
+        if(link==null){link=new Link(device);links.put(device,link);}
         if(!link.assigned && !multi && assignedCount()>0)return false;
         link.assigned=true;syncAdvertising();return true;
     }
@@ -279,7 +279,7 @@ final class Peripheral {
         try {
             advertisingEpoch++;
             if(advertiser!=null&&advertising!=null)advertiser.stopAdvertisingSet(advertising);
-            if(server!=null) {for(BluetoothDevice device:links.keySet())server.cancelConnection(device);server.close();}
+            if(server!=null) {for(Link link:links.values())if(link.assigned)server.cancelConnection(link.device);server.close();}
             if(!multiplexed&&adapter!=null&&adapter.isEnabled()&&oldName!=null&&desiredName!=null&&desiredName.equals(adapter.getName()))adapter.setName(oldName);
         } catch(SecurityException ignored) { /* Permissions can be revoked in Settings. */ }
         if(registered) {activity.unregisterReceiver(changes);registered=false;}

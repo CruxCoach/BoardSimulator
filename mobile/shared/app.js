@@ -28,7 +28,7 @@ function cascade(level) {
   const layouts=entries.filter(x=>x.layout===$('layout').value);
   if(level!=='size') options('size',layouts.map(x=>[String(x.size),x.sizeName]),String(layouts[0].defaultSize));
   selected=layouts.find(x=>String(x.size)===$('size').value)||layouts[0];
-  $('apiLabel').hidden=selected.family!=='aurora'; $('size').disabled=selected.size===null;
+  $('apiLabel').hidden=selected.family!=='aurora';$('serialLabel').hidden=selected.family!=='aurora'; $('size').disabled=selected.size===null;
   $('identity').textContent=selected.name+' · '+selected.advertised;
   holds=[]; picture=null; const current=++generation;
   if(selected.image) {
@@ -41,6 +41,7 @@ function cascade(level) {
 }
 for(const id of ['board','layout','size']) $(id).onchange=()=>{const restart=active;cascade(id);if(restart)start();};
 $('api').onchange=()=>{if(active)start();};
+$('serial').onchange=()=>{if(active)start();};
 function draw() {
   const canvas=$('canvas'),ctx=canvas.getContext('2d'),box=canvas.getBoundingClientRect(),scale=window.devicePixelRatio||1;
   canvas.width=Math.round(box.width*scale);canvas.height=Math.round(box.height*scale);ctx.scale(scale,scale);
@@ -63,11 +64,12 @@ function setActive(value) {
 }
 $('connections').onchange=()=>native('connections',{multi:$('connections').value==='multi'});
 function start() {
+  if(selected.family==='aurora'&&!$('serial').reportValidity())return;
   received=0; stateValue=[1,71,0,0]; holds=[];
   const emit=value=>{holds=Array.from(new Map(value.map(h=>[h[0],h])).values());draw();};
   session=new BoardSession(selected,Number($('api').value),emit,log);
   const profile=JSON.parse(JSON.stringify(selected)); profile.runToken=runToken=++nextRunToken;
-  if(profile.family==='aurora') profile.name=profile.name.replace(/@3$/,'@'+$('api').value);
+  if(profile.family==='aurora') profile.name=profile.name.replace(/#0001@3$/,'#'+$('serial').value+'@'+$('api').value);
   delete profile.points;delete profile.roles;delete profile.addresses;
   $('identity').textContent=profile.name+' · '+profile.advertised;
   setActive(true); native('start',{profile,multi:$('connections').value==='multi'});
@@ -78,6 +80,7 @@ $('resume').onclick=()=>native('release');
 $('probe').onclick=()=>native('probe');
 $('copy').onclick=()=>native('copy',{text:lines.join('\n')});
 const api={
+  dispose() {window.removeEventListener("resize",draw);generation++;picture=null;},
   canProbe() { $("probe").hidden=false; },
   canResume() { $("resume").hidden=false; },
   status(message,running) { $('status').textContent=message;log(message);if(typeof running==='boolean')setActive(running); },
@@ -106,9 +109,12 @@ window.BLE={
   canResume() {for(const panel of panelAPIs)panel.canResume();}
 };
 function rebuild(count) {
+  for(const api of panelAPIs)api.dispose();
   panels.textContent='';panelAPIs=[];
   for(let slot=0;slot<count;slot++) {
-    const element=template.cloneNode(true);panels.appendChild(element);
+    const element=template.cloneNode(true);
+    const title=document.createElement("h2");title.textContent="Board "+(slot+1);element.prepend(title);
+    panels.appendChild(element);
     panelAPIs.push(createPanel(element,slot));
   }
 }

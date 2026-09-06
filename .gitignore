@@ -12,3 +12,4 @@ mobile/ios/build/
 mobile/ios/*.xcodeproj/
 *.xcuserstate
 mobile/tests/generated-fixtures.json
+mobile/tests/node_modules/
