@@ -102,6 +102,10 @@ def build(catalog: list[dict]) -> list[dict]:
             for cmd in Command:
                 writes.append(encode(cmd, wire=WireVersion.EWALLS_1_44,
                                      route_id="legacy", user_id="user", color="#00ff00", diodes=ids[:3]))
+            addresses32 = [int(p) for p in item["points"] if int(p) > 65535]
+            writes.append(encode(Command.ACTIVATE_WALL_LED_ID,
+                                 wire=WireVersion.EWALLS_1_44, route_id="u32", user_id="user",
+                                 color="#ff00ff", diodes=addresses32[:3]))
             writes += [b'{"command":"ACTIVATE_WALL","routeId":"json","diodes":[',
                        str(ids[0]).encode()+b'],"color":"#ff0033"}',
                        b'{"cmd":"TURN_OFF_ALL"}{"cmd":"TURN_ON_ALL","color":"#123456"}']

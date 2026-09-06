@@ -93,7 +93,19 @@ Python-vs-JavaScript conformance, not proof of official-app interoperability.
 
 ## Physical validation matrix
 
-All cells below are **not tested** until a human runs them. Controller and
+A Nokia 6.1 running Android 15/API 35 was available over ADB during implementation.
+The debug APK installed and cold-launched successfully. The normal Nearby devices
+permission flow, Bluetooth-off error and successful Kilter advertising callback
+were observed. An external central then sent five complete Aurora API 3 climbs
+fragmented across 20-byte writes: 10, 12, 8, 12 and 9 holds. The live view reported
+9 holds for the final climb; replaying the captured RX bytes through the Linux
+reference decoder produced those same five counts. The controller app/version
+was not identified, so this is a real BLE reception check, not a claim about
+CruxCoach or a specific official app. Other boards and the full matrix remain
+pending.
+
+All named app/configuration cells below are **not tested** until identified tests
+are recorded. Controller and
 simulator ordinarily run on separate devices. Record app versions, exact phone
 model/OS, selected board/layout/size/API, advertisement name/UUID, negotiated MTU,
 GATT discovery, raw RX diagnostics, screenshot and result for each run.

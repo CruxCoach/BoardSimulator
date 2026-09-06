@@ -3,7 +3,8 @@
 Assessment date: 2026-09-06. These apps are foreground BLE **peripherals**;
 CruxCoach or the official app runs on a different physical device. No network
 service, Web Bluetooth, mocked radio, pairing workflow or app store is required.
-Hardware interoperability has not yet been verified.
+Android 15 advertising and reception from an unidentified external controller
+have been observed; the named-app interoperability matrix remains unverified.
 
 ## Decision
 
@@ -84,7 +85,12 @@ Denied, unsupported, powered-off and registration/advertising errors are visible
 No background mode is declared; backgrounding removes services and advertisements.
 CoreBluetooth controls packet placement and advertises on a best-effort basis.
 Only local name and service UUIDs can be supplied; there is no raw advertising
-packet API. In the background the local name disappears and UUID handling changes.
+packet API. Apple documents 28 bytes for foreground advertisement values plus
+10 bytes for a local name in scan response (per-type headers are additional).
+A long Aurora name and a 128-bit discovery UUID can therefore compete for space.
+If the API suffix is absent in the observed scan, try the explicit Aurora API 2
+selection, since controllers may default to that protocol level. This is a
+diagnostic workaround, not evidence that a particular official scanner works. In the background the local name disappears and UUID handling changes.
 Consequently official-app discovery must be checked on the actual iPhone, with
 particular attention to long Aurora names and their API-level suffix. See
 [Apple's peripheral guide](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/PerformingCommonPeripheralRoleTasks/PerformingCommonPeripheralRoleTasks.html)

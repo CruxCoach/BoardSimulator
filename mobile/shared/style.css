@@ -7,3 +7,4 @@ button{align-self:end;cursor:pointer}#start{background:#166449}button:disabled,s
 #status{padding:10px;background:#25353e;white-space:pre-wrap}#identity{font-family:monospace;overflow-wrap:anywhere}
 #view{height:55vh;min-height:260px;width:100%;background:#101214}canvas{width:100%;height:100%;display:block}
 #legend{font-size:13px}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;font-size:11px}
+[hidden]{display:none!important}

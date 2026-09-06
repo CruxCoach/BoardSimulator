@@ -27,7 +27,7 @@ as an ASCII grid on stdout.
 | Platform | Implementation | Build/install status | Simultaneous boards |
 |---|---|---|---|
 | Linux | Python, BlueZ, Tk or headless | Existing runtime; 471 automated tests | Existing multi-adapter / two-instance modes |
-| Android 9+ | Native Java GATT server/advertiser, offline WebView | Debug APK built and lint checked; device tests pending | One independent board per phone |
+| Android 9+ | Native Java GATT server/advertiser, offline WebView | Debug APK built/linted; Android 15 install, advertising and live RX checked | One independent board per phone |
 | iOS 15+ | Native Swift CoreBluetooth, offline WKWebView | Unsigned device and simulator compilation in macOS CI; signing/device tests pending | One independent board per phone |
 
 All **52 board/layout/size selections** are exported from the Linux registry,
