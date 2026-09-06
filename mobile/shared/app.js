@@ -1,10 +1,12 @@
 /* Offline UI. Native callbacks and bridge calls are serialized on the UI thread. */
 'use strict';
-const $=id=>document.getElementById(id);
-let selected,decoder,holds=[],picture=null,generation=0,active=false;
-let stateValue=[1,71,0,0],lines=[],received=0;
+let nextRunToken=0;
+function createPanel(element,slot) {
+const $=id=>element.querySelector('[id="'+id+'"]');
+let selected,session,holds=[],picture=null,generation=0,active=false;
+let stateValue=[1,71,0,0],lines=[],received=0,runToken=0;
 function native(command,payload={}) {
-  const message=JSON.stringify({command,...payload});
+  const message=JSON.stringify({command,...payload,slot});
   if(window.Native) window.Native.postMessage(message);
   else if(window.webkit && window.webkit.messageHandlers.ble) window.webkit.messageHandlers.ble.postMessage(message);
   else log('No native BLE bridge: browser preview cannot advertise.');
@@ -37,7 +39,8 @@ function cascade(level) {
     selected.family==='moonboard' ? 'Start green · Hand blue · Finish red · Foot cyan · Left violet · Match pink' : 'Quantum route/editor colors';
   draw();
 }
-for(const id of ['board','layout','size']) $(id).onchange=()=>cascade(id);
+for(const id of ['board','layout','size']) $(id).onchange=()=>{const restart=active;cascade(id);if(restart)start();};
+$('api').onchange=()=>{if(active)start();};
 function draw() {
   const canvas=$('canvas'),ctx=canvas.getContext('2d'),box=canvas.getBoundingClientRect(),scale=window.devicePixelRatio||1;
   canvas.width=Math.round(box.width*scale);canvas.height=Math.round(box.height*scale);ctx.scale(scale,scale);
@@ -55,32 +58,64 @@ function draw() {
 }
 window.addEventListener('resize',draw);
 function setActive(value) {
-  active=value; for(const id of ['board','layout','size','api','start']) $(id).disabled=value;
+  active=value; $('start').disabled=value;
   if(!value) $('size').disabled=selected.size===null;
 }
-$('start').onclick=()=>{
+$('connections').onchange=()=>native('connections',{multi:$('connections').value==='multi'});
+function start() {
   received=0; stateValue=[1,71,0,0]; holds=[];
   const emit=value=>{holds=Array.from(new Map(value.map(h=>[h[0],h])).values());draw();};
-  decoder=selected.family==='aurora'?new BoardProtocols.Aurora(Number($('api').value),emit,log):
-    selected.family==='moonboard'?new BoardProtocols.Moon(selected.rows,emit,log):new Quantum(selected.addresses,emit,log);
-  const profile=JSON.parse(JSON.stringify(selected));
+  session=new BoardSession(selected,Number($('api').value),emit,log);
+  const profile=JSON.parse(JSON.stringify(selected)); profile.runToken=runToken=++nextRunToken;
   if(profile.family==='aurora') profile.name=profile.name.replace(/@3$/,'@'+$('api').value);
   delete profile.points;delete profile.roles;delete profile.addresses;
   $('identity').textContent=profile.name+' · '+profile.advertised;
-  setActive(true); native('start',{profile});
-};
+  setActive(true); native('start',{profile,multi:$('connections').value==='multi'});
+}
+$('start').onclick=start;
 $('stop').onclick=()=>native('stop');
+$('resume').onclick=()=>native('release');
+$('probe').onclick=()=>native('probe');
 $('copy').onclick=()=>native('copy',{text:lines.join('\n')});
-window.BLE={
+const api={
+  canProbe() { $("probe").hidden=false; },
+  canResume() { $("resume").hidden=false; },
   status(message,running) { $('status').textContent=message;log(message);if(typeof running==='boolean')setActive(running); },
-  receive(bytes) {
-    if(!decoder||!active)return;
+  receive(bytes,peer="default",token=runToken) {
+    if(!session||!active||token!==runToken)return [];
     received+=bytes.length;log('RX '+bytes.length+' B ('+received+' total): '+bytes.map(b=>b.toString(16).padStart(2,'0')).join(''));
-    const updates=decoder.feed(bytes);
+    const updates=session.feed(peer,bytes);
     for(const update of updates) if(update.state) stateValue=update.state;
     return updates;
   },
   readState() { return stateValue; },
-  disconnected() { if(decoder)decoder.reset();log('Transport reset; rendered controller state retained'); }
+  disconnected(peer='default') { if(session)session.disconnect(peer);log(peer+': transport reset; board state retained'); }
 };
-cascade('board');native('ready');
+cascade('board');native('ready');return api;
+}
+
+const panels=document.getElementById('panels');
+const template=panels.firstElementChild.cloneNode(true);
+let panelAPIs=[];
+window.BLE={
+  status(text,running,slot=0) {if(panelAPIs[slot])panelAPIs[slot].status(text,running);},
+  receive(bytes,peer,token,slot=0) {return panelAPIs[slot]?panelAPIs[slot].receive(bytes,peer,token):[];},
+  readState(slot=0) {return panelAPIs[slot]?panelAPIs[slot].readState():[1,71,0,0];},
+  disconnected(peer,slot=0) {if(panelAPIs[slot])panelAPIs[slot].disconnected(peer);},
+  canProbe() {for(const panel of panelAPIs)panel.canProbe();},
+  canResume() {for(const panel of panelAPIs)panel.canResume();}
+};
+function rebuild(count) {
+  panels.textContent='';panelAPIs=[];
+  for(let slot=0;slot<count;slot++) {
+    const element=template.cloneNode(true);panels.appendChild(element);
+    panelAPIs.push(createPanel(element,slot));
+  }
+}
+rebuild(1);
+document.getElementById('instances').onchange=event=>{
+  const count=Number(event.target.value),message=JSON.stringify({command:'instances',count});
+  if(window.Native)window.Native.postMessage(message);
+  else if(window.webkit)window.webkit.messageHandlers.ble.postMessage(message);
+  rebuild(count);
+};

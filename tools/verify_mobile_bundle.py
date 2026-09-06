@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def verify(bundle: Path) -> None:
-    for name in ("index.html", "style.css", "app.js", "protocols.js", "quantum.js"):
+    for name in ("index.html", "style.css", "app.js", "protocols.js", "quantum.js", "session.js"):
         assert (bundle / name).read_bytes() == (ROOT / "mobile/shared" / name).read_bytes(), name
     catalog = json.loads((bundle / "generated/catalog.json").read_text())
     assert (bundle / "generated/catalog.js").read_bytes() == (ROOT / "mobile/shared/generated/catalog.js").read_bytes()

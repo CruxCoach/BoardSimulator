@@ -27,8 +27,8 @@ as an ASCII grid on stdout.
 | Platform | Implementation | Build/install status | Simultaneous boards |
 |---|---|---|---|
 | Linux | Python, BlueZ, Tk or headless | Existing runtime; 471 automated tests | Existing multi-adapter / two-instance modes |
-| Android 9+ | Native Java GATT server/advertiser, offline WebView | Debug APK built/linted; Android 15 install, advertising and live RX checked | One independent board per phone |
-| iOS 15+ | Native Swift CoreBluetooth, offline WKWebView | Unsigned device and simulator compilation in macOS CI; signing/device tests pending | One independent board per phone |
+| Android 9+ | Native Java GATT server/advertiser, offline WebView | Debug APK built/linted; Android 15 install, advertising and live RX checked | Two experimental disjoint GATT endpoints; overlapping profiles pending |
+| iOS 15+ | Native Swift CoreBluetooth, offline WKWebView | Unsigned device and simulator compilation in macOS CI; signing/device tests pending | Two experimental disjoint GATT endpoints; overlapping profiles pending |
 
 All **52 board/layout/size selections** are exported from the Linux registry,
 including Quantum XL/L/M/S Fitness/Belay. Aurora API 2 and 3 are selectable.
@@ -54,11 +54,17 @@ cd mobile/android
 # app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Stop BLE before changing board/layout/size. Backgrounding stops the mobile
-peripheral; Start resumes with a new session. Android temporarily changes the
+Changing board/layout/size rebuilds that mobile endpoint at runtime. Backgrounding
+stops the mobile peripherals; Start resumes with a new session. Android temporarily changes the
 adapter name and restores it on normal Stop. iOS advertisement placement/name
-truncation is controlled by the OS. Multiple advertising sets are not treated as
-independently routable boards; use Linux or multiple phones for that requirement.
+truncation is controlled by the OS. **Full Linux feature parity is not achieved.** Two panels with real BLE endpoints
+are implemented experimentally for Quantum + Aurora/MoonBoard. Duplicate or
+shared UART profiles remain rejected because advertising-to-link routing is
+missing. See the [feature matrix, API evidence, probes and alternatives](docs/mobile-parity.md).
+Exclusive and multi-connect are separate controls. Android single-board exclusive
+stops advertising on connection; iOS can only stop on first ATT activity and
+requires manual resume after disconnect. Updated native modes await physical
+testing; the attached Android device is currently off limits by user instruction.
 
 ## Monorepo layout
 

@@ -3,15 +3,20 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' file:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data:; connect-src 'none'">
 <title>BoardSimulator</title><link rel="stylesheet" href="style.css"></head><body>
 <header><h1>BoardSimulator</h1><p>Real BLE peripheral · foreground developer tool</p></header>
+<label>Board instances<select id="instances"><option value="1">1</option><option value="2">2 · experimental disjoint GATT</option></select></label>
+<p>Full Linux parity is pending. Two-board mode requires Quantum + one Aurora/MoonBoard; discovery identities and exclusive connection detection need physical validation.</p>
+<main id="panels"><section class="board-panel">
 <section class="controls">
 <label>Board<select id="board"></select></label><label>Layout<select id="layout"></select></label>
 <label>Size<select id="size"></select></label><label id="apiLabel">Aurora API<select id="api"><option>3</option><option>2</option></select></label>
-<button id="start">Start BLE</button><button id="stop">Stop</button></section>
-<p id="identity"></p><p id="capability">One board per phone. Use Linux adapters or additional phones for independent boards.</p>
+<label>Connections<select id="connections"><option value="single">Exclusive</option><option value="multi">Multi-connect</option></select></label>
+<button id="start">Start BLE</button><button id="stop">Stop</button><button id="resume" hidden>Resume advertising after disconnect</button></section>
+<p id="identity"></p><p id="capability">Independent state per board; controller fragment buffers are isolated. Duplicate/overlapping GATT profiles are rejected.</p>
 <p id="status" role="status">Stopped</p><div id="view"><canvas id="canvas"></canvas></div>
 <p id="legend"></p><p id="count">0 lit holds</p>
 <details><summary>Developer diagnostics</summary><p>Quantum replies reproduce the Linux compatibility model; physical controller timing is unverified.</p>
-<button id="copy">Copy diagnostics</button><pre id="log"></pre></details>
+<button id="copy">Copy diagnostics</button><button id="probe" hidden>Stop board and open two-advertiser routing experiment</button><pre id="log"></pre></details>
+</section></main>
 <script>if(typeof globalThis==='undefined') window.globalThis=window;</script>
-<script src="generated/catalog.js"></script><script src="protocols.js"></script><script src="quantum.js"></script><script src="app.js"></script>
+<script src="generated/catalog.js"></script><script src="protocols.js"></script><script src="quantum.js"></script><script src="session.js"></script><script src="app.js"></script>
 </body></html>

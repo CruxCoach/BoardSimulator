@@ -15,24 +15,40 @@ final class Peripheral {
     private static final String STATE = "0000fff4-0000-1000-8000-00805f9b34fb";
     private static final String NOTIFY = "0000fff1-0000-1000-8000-00805f9b34fb";
     private final MainActivity activity;
+    private final int slot;
+    private boolean multiplexed;
     private BluetoothAdapter adapter;
     private BluetoothGattServer server;
     private BluetoothLeAdvertiser advertiser;
-    private AdvertiseCallback advertising;
-    private BluetoothDevice client;
+    private AdvertisingSetCallback advertising;
+    private AdvertisingSet advertisingSet;
+    private boolean advertisementEnabled;
+    private static final class Link {
+        final BluetoothDevice device;
+        int mtu=23; boolean assigned;
+        final Set<UUID> subscribed=new HashSet<>();
+        Link(BluetoothDevice device) { this.device=device; }
+    }
+    private static final class Notification {
+        final Link link; final byte[] value;
+        Notification(Link link, byte[] value) {this.link=link;this.value=value;}
+    }
+    private final Map<BluetoothDevice,Link> links=new LinkedHashMap<>();
+    private boolean multi, servicesReady;
+    private int advertisingEpoch;
     private String oldName, desiredName;
     private boolean naming;
-    private int epoch, mtu = 23;
+    private int epoch,runToken;
     private final ArrayDeque<BluetoothGattService> services = new ArrayDeque<>();
-    private final Set<UUID> subscribed = new HashSet<>();
-    private final ArrayDeque<byte[]> notifications = new ArrayDeque<>();
+    private final ArrayDeque<Notification> notifications = new ArrayDeque<>();
     private boolean notifying;
+    private Notification inFlight;
     private UUID advertisedUUID;
     private final BroadcastReceiver changes = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             if (BluetoothAdapter.ACTION_STATE_CHANGED.equals(intent.getAction()) &&
                     intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1) != BluetoothAdapter.STATE_ON) {
-                stop(); activity.status("Bluetooth turned off. Enable Bluetooth, then Start.", false);
+                stop(); status("Bluetooth turned off. Enable Bluetooth, then Start.", false);
             } else if (naming && BluetoothAdapter.ACTION_LOCAL_NAME_CHANGED.equals(intent.getAction()) &&
                     desiredName.equals(intent.getStringExtra(BluetoothAdapter.EXTRA_LOCAL_NAME))) {
                 naming = false; publishNext();
@@ -40,12 +56,21 @@ final class Peripheral {
         }
     };
     private boolean registered;
-    Peripheral(MainActivity activity) { this.activity = activity; }
+    Peripheral(MainActivity activity,int slot) { this.activity = activity;this.slot=slot; }
+    void setMultiplexed(boolean enabled) { multiplexed=enabled; }
+    private void status(String message,boolean running) {activity.status(slot,message,running);}
+    private long assignedCount(){return links.values().stream().filter(l->l.assigned).count();}
+    private boolean assign(BluetoothDevice device) {
+        Link link=links.get(device);
+        if(link==null)return false;
+        if(!link.assigned && !multi && assignedCount()>0)return false;
+        link.assigned=true;syncAdvertising();return true;
+    }
     static byte[] bytes(JSONArray a) throws JSONException {
         byte[] b = new byte[a.length()]; for(int i=0;i<b.length;i++) b[i]=(byte)a.getInt(i); return b;
     }
-    void start(JSONObject profile) {
-        stop(); final int generation = epoch;
+    void start(JSONObject profile, boolean multi) {
+        stop(); this.multi=multi;runToken=profile.optInt("runToken"); final int generation = epoch;
         try {
             BluetoothManager manager = (BluetoothManager)activity.getSystemService(Context.BLUETOOTH_SERVICE);
             adapter = manager == null ? null : manager.getAdapter();
@@ -82,28 +107,64 @@ final class Peripheral {
             if(!desiredName.equals(oldName)) {
                 naming=true;
                 if(!adapter.setName(desiredName)) throw new IllegalStateException("Cannot set Bluetooth name");
-                activity.status("Setting adapter name to " + desiredName, true);
+                status("Setting adapter name to " + desiredName, true);
                 new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
                     if(generation==epoch && naming) fail("Bluetooth name change timed out; retry Start");
                 }, 5000);
             } else publishNext();
         } catch(Exception e) { fail(e.getMessage()); }
     }
-    private void fail(String message) { stop(); activity.status("BLE error: " + message,false); }
+    private void fail(String message) { stop(); status("BLE error: " + message,false); }
     private void publishNext() {
         if(server==null) return;
         if(!services.isEmpty()) { if(!server.addService(services.remove())) fail("GATT service registration rejected"); return; }
-        final int generation=epoch;
-        advertising=new AdvertiseCallback() {
-            @Override public void onStartSuccess(AdvertiseSettings settings) { activity.runOnUiThread(() -> {
-                if(generation==epoch) activity.status("Advertising " + desiredName + " · one board / one controller",true);
-            }); }
-            @Override public void onStartFailure(int code) { activity.runOnUiThread(() -> {if(generation==epoch)fail("Advertising failed (code " + code + ")");}); }
+        servicesReady=true;
+        syncAdvertising();
+    }
+    void setMulti(boolean enabled) {
+        multi=enabled;
+        if(server!=null && servicesReady)syncAdvertising();
+    }
+    private void stopAdvertisingOnly() {
+        if(advertisingSet!=null && advertisementEnabled) {
+            advertisementEnabled=false;advertisingSet.enableAdvertising(false,0,0);
+        }
+    }
+    private void syncAdvertising() {
+        if(!servicesReady)return;
+        boolean wanted=multi || assignedCount()==0;
+        if(advertisingSet!=null) {
+            if(wanted!=advertisementEnabled) {
+                advertisementEnabled=wanted;advertisingSet.enableAdvertising(wanted,0,0);
+            }
+            if(!wanted)status("Exclusive: "+assignedCount()+" controller(s) · advertising stopped"+(multiplexed?" after GATT access; address assignment unavailable":""),true);
+            return;
+        }
+        if(advertising!=null)return;
+        final int generation=epoch, advGeneration=++advertisingEpoch;
+        advertising=new AdvertisingSetCallback() {
+            @Override public void onAdvertisingSetStarted(AdvertisingSet set,int txPower,int result) {
+                if(generation!=epoch || advGeneration!=advertisingEpoch)return;
+                if(result!=ADVERTISE_SUCCESS){fail("Advertising failed (code "+result+")");return;}
+                advertisingSet=set;advertisementEnabled=true;
+                status("Advertising "+desiredName+(multi?" · multi-connect":" · exclusive"),true);
+                syncAdvertising();activity.ready(slot);
+            }
+            @Override public void onAdvertisingEnabled(AdvertisingSet set,boolean enabled,int result) {
+                if(generation!=epoch || advGeneration!=advertisingEpoch)return;
+                if(result!=ADVERTISE_SUCCESS){fail("Advertising mode update failed "+result);return;}
+                // A callback can describe an older queued enable request; current
+                // desired state remains authoritative and was queued in order.
+                status((enabled?"Advertising ":"Advertising stopped: ")+desiredName+" · "+assignedCount()+" controller(s)",true);
+            }
         };
-        // Full service UUID in advertisement; full board name in scan response.
-        advertiser.startAdvertising(new AdvertiseSettings.Builder().setConnectable(true).setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY).build(),
+        // Create each set once while its adapter name is selected. Exclusive
+        // pause/resume toggles the existing set, preserving that name snapshot
+        // when another board later changes the adapter's global local name.
+        advertiser.startAdvertisingSet(new AdvertisingSetParameters.Builder().setLegacyMode(true).setConnectable(true).setScannable(true).setInterval(AdvertisingSetParameters.INTERVAL_LOW).build(),
             new AdvertiseData.Builder().addServiceUuid(new ParcelUuid(advertisedUUID)).build(),
-            new AdvertiseData.Builder().setIncludeDeviceName(true).build(), advertising);
+            new AdvertiseData.Builder().setIncludeDeviceName(true).build(),null,null,advertising,
+            new android.os.Handler(android.os.Looper.getMainLooper()));
     }
     private BluetoothGattServerCallback callback(final int generation) {
         return new BluetoothGattServerCallback() {
@@ -116,30 +177,42 @@ final class Peripheral {
             @Override public void onConnectionStateChange(BluetoothDevice device,int status,int state) {
                 post(() -> {
                     if(state==BluetoothProfile.STATE_CONNECTED) {
-                        if(client!=null && !client.equals(device)) {server.cancelConnection(device);return;}
-                        client=device;mtu=23;activity.status("Connected · " + device.getAddress(),true);
-                    } else if(state==BluetoothProfile.STATE_DISCONNECTED && device.equals(client)) {
-                        client=null;subscribed.clear();notifications.clear();notifying=false;activity.disconnected();
-                        activity.status("Disconnected ("+status+") · advertising",true);
+                        if(!multiplexed && !multi && !links.isEmpty() && !links.containsKey(device)) {server.cancelConnection(device);return;}
+                        if(!links.containsKey(device))links.put(device,new Link(device));
+                        if(!multiplexed)links.get(device).assigned=true;
+                        status("Connected · " + device.getAddress()+" · "+links.size()+" controller(s)",true);
+                        syncAdvertising();
+                    } else if(state==BluetoothProfile.STATE_DISCONNECTED && links.containsKey(device)) {
+                        Link old=links.remove(device);
+                        notifications.removeIf(n->n.link==old);
+                        if(inFlight!=null && inFlight.link==old){inFlight=null;notifying=false;sendNotification();}
+                        activity.disconnected(slot,device.getAddress());
+                        status("Disconnected ("+status+") · "+links.size()+" controller(s)",true);
+                        syncAdvertising();
                     }
                 });
             }
-            @Override public void onMtuChanged(BluetoothDevice d,int value) {post(() -> {if(d.equals(client))mtu=value;});}
+            @Override public void onMtuChanged(BluetoothDevice d,int value) {post(() -> {if(links.containsKey(d))links.get(d).mtu=value;});}
             @Override public void onCharacteristicWriteRequest(BluetoothDevice d,int request,BluetoothGattCharacteristic c,boolean prepared,boolean response,int offset,byte[] value) {
                 byte[] copy=value.clone();
                 post(() -> {
                     int result=prepared?BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED:offset!=0?BluetoothGatt.GATT_INVALID_OFFSET:
-                        !d.equals(client)?BluetoothGatt.GATT_FAILURE:BluetoothGatt.GATT_SUCCESS;
+                        !assign(d)?BluetoothGatt.GATT_FAILURE:BluetoothGatt.GATT_SUCCESS;
                     if(response) server.sendResponse(d,request,result,offset,null);
-                    if(result==BluetoothGatt.GATT_SUCCESS) activity.receive(copy, updates -> {
-                        if(generation!=epoch || !d.equals(client))return;
+                    Link link=links.get(d);
+                    if(result==BluetoothGatt.GATT_SUCCESS) activity.receive(slot,runToken,d.getAddress(),copy, updates -> {
+                        if(generation!=epoch || links.get(d)!=link)return;
                         try {
                             for(int i=0;i<updates.length();i++) {
                                 JSONObject u=updates.getJSONObject(i);
                                 if(u.has("state")) characteristic(STATE).setValue(bytes(u.getJSONArray("state")));
-                                if(u.has("notify")&&!u.isNull("notify")&&subscribed.contains(UUID.fromString(NOTIFY))) {
-                                    if(notifications.size()>=128) {fail("Notification queue overflow");return;}
-                                    notifications.add(bytes(u.getJSONArray("notify")));
+                                if(u.has("notify")&&!u.isNull("notify")) {
+                                    byte[] notification=bytes(u.getJSONArray("notify"));
+                                    boolean exception=notification.length>1 && (notification[1]&128)!=0;
+                                    for(Link target:links.values())if(target.subscribed.contains(UUID.fromString(NOTIFY)) && (!exception || target==link)) {
+                                        if(notifications.size()>=128) {fail("Notification queue overflow");return;}
+                                        notifications.add(new Notification(target,notification));
+                                    }
                                 }
                             }
                             sendNotification();
@@ -149,14 +222,15 @@ final class Peripheral {
             }
             @Override public void onCharacteristicReadRequest(BluetoothDevice d,int request,int offset,BluetoothGattCharacteristic c) {
                 post(() -> {
-                    if(c.getUuid().toString().equals(STATE)) activity.readState(value -> {
+                    if(!assign(d)){server.sendResponse(d,request,BluetoothGatt.GATT_FAILURE,offset,null);return;}
+                    if(c.getUuid().toString().equals(STATE)) activity.readState(slot,value -> {
                         if(generation==epoch && server!=null) readResponse(d,request,offset,value);
                     });
                     else readResponse(d,request,offset,c.getValue());
                 });
             }
             @Override public void onDescriptorReadRequest(BluetoothDevice d,int request,int offset,BluetoothGattDescriptor desc) {
-                post(() -> readResponse(d,request,offset,subscribed.contains(desc.getCharacteristic().getUuid())?BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE:BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE));
+                post(() -> readResponse(d,request,offset,links.containsKey(d)&&links.get(d).subscribed.contains(desc.getCharacteristic().getUuid())?BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE:BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE));
             }
             @Override public void onDescriptorWriteRequest(BluetoothDevice d,int request,BluetoothGattDescriptor desc,boolean prepared,boolean response,int offset,byte[] value) {
                 byte[] copy=value.clone();post(() -> {
@@ -164,14 +238,16 @@ final class Peripheral {
                     if(prepared)result=BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED;
                     else if(offset!=0)result=BluetoothGatt.GATT_INVALID_OFFSET;
                     else if(!CCCD.equals(desc.getUuid()) || (!Arrays.equals(copy,new byte[]{0,0})&&!Arrays.equals(copy,new byte[]{1,0})))result=BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED;
-                    else if(copy[0]==1)subscribed.add(desc.getCharacteristic().getUuid());
-                    else subscribed.remove(desc.getCharacteristic().getUuid());
+                    else if(!assign(d))result=BluetoothGatt.GATT_FAILURE;
+                    else if(copy[0]==1)links.get(d).subscribed.add(desc.getCharacteristic().getUuid());
+                    else links.get(d).subscribed.remove(desc.getCharacteristic().getUuid());
                     if(response)server.sendResponse(d,request,result,offset,null);
                 });
             }
             @Override public void onExecuteWrite(BluetoothDevice d,int request,boolean execute) {post(() -> server.sendResponse(d,request,BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED,0,null));}
             @Override public void onNotificationSent(BluetoothDevice d,int status) {post(() -> {
-                notifying=false;
+                if(inFlight==null || !inFlight.link.device.equals(d))return;
+                inFlight=null;notifying=false;
                 if(status!=BluetoothGatt.GATT_SUCCESS)fail("Notification failed "+status);else sendNotification();
             });}
         };
@@ -182,25 +258,32 @@ final class Peripheral {
     }
     private void readResponse(BluetoothDevice d,int request,int offset,byte[] value) {
         if(offset<0||offset>value.length)server.sendResponse(d,request,BluetoothGatt.GATT_INVALID_OFFSET,offset,null);
-        else server.sendResponse(d,request,BluetoothGatt.GATT_SUCCESS,offset,Arrays.copyOfRange(value,offset,Math.min(value.length,offset+mtu-1)));
+        else server.sendResponse(d,request,BluetoothGatt.GATT_SUCCESS,offset,Arrays.copyOfRange(value,offset,Math.min(value.length,offset+(links.containsKey(d)?links.get(d).mtu:23)-1)));
     }
     private void sendNotification() {
-        if(notifying||client==null||notifications.isEmpty())return;
-        byte[] value=notifications.remove();
-        // No invented application-level fragmentation: eWalls expects one broadcast.
-        if(value.length>mtu-3) {activity.status("Quantum notification needs MTU >= "+(value.length+3)+"; fff4 read remains available",true);sendNotification();return;}
-        BluetoothGattCharacteristic c=characteristic(NOTIFY);c.setValue(value);notifying=true;
-        if(!server.notifyCharacteristicChanged(client,c,false))fail("Notification enqueue failed");
+        if(notifying)return;
+        while(!notifications.isEmpty()) {
+            Notification n=notifications.remove();
+            if(links.get(n.link.device)!=n.link)continue;
+            if(n.value.length>n.link.mtu-3) {
+                status("Quantum notification for "+n.link.device.getAddress()+" needs MTU >= "+(n.value.length+3)+"; fff4 is readable",true);
+                continue;
+            }
+            BluetoothGattCharacteristic c=characteristic(NOTIFY);c.setValue(n.value);notifying=true;inFlight=n;
+            if(!server.notifyCharacteristicChanged(n.link.device,c,false))fail("Notification enqueue failed");
+            return;
+        }
     }
     void stop() {
-        epoch++;naming=false;
+        epoch++;naming=false;servicesReady=false;
         try {
-            if(advertiser!=null&&advertising!=null)advertiser.stopAdvertising(advertising);
-            if(server!=null) {if(client!=null)server.cancelConnection(client);server.close();}
-            if(adapter!=null&&adapter.isEnabled()&&oldName!=null&&desiredName!=null&&desiredName.equals(adapter.getName()))adapter.setName(oldName);
+            advertisingEpoch++;
+            if(advertiser!=null&&advertising!=null)advertiser.stopAdvertisingSet(advertising);
+            if(server!=null) {for(BluetoothDevice device:links.keySet())server.cancelConnection(device);server.close();}
+            if(!multiplexed&&adapter!=null&&adapter.isEnabled()&&oldName!=null&&desiredName!=null&&desiredName.equals(adapter.getName()))adapter.setName(oldName);
         } catch(SecurityException ignored) { /* Permissions can be revoked in Settings. */ }
         if(registered) {activity.unregisterReceiver(changes);registered=false;}
-        server=null;client=null;advertising=null;oldName=null;desiredName=null;
-        services.clear();subscribed.clear();notifications.clear();notifying=false;
+        server=null;links.clear();advertising=null;advertisingSet=null;advertisementEnabled=false;oldName=null;desiredName=null;
+        services.clear();notifications.clear();notifying=false;inFlight=null;
     }
 }

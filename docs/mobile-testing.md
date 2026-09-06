@@ -1,5 +1,9 @@
 # Building, installing and validating mobile apps
 
+**Current status:** full parity is unfulfilled; see [mobile-parity.md](mobile-parity.md).
+The new multi-connect, exclusive and two-endpoint modes require physical tests.
+Do not access the attached ADB device until the user explicitly lifts the ban.
+
 ## Android debug build
 
 Install Python 3.10+, requirements.txt, JDK 17 and Android SDK platform 35.
@@ -82,6 +86,7 @@ python -m pytest tests/ -q
 python tools/export_mobile.py
 python tools/mobile_fixtures.py
 node mobile/tests/conformance.cjs
+node mobile/tests/controllers.cjs
 ```
 
 94 reference traces cover all 52 selections, Aurora APIs 2/3, board-local palettes,

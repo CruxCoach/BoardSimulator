@@ -4,13 +4,17 @@ import UIKit
 
 final class Peripheral: NSObject, CBPeripheralManagerDelegate {
     private weak var controller: BoardController?
+    private let slot: Int
     private var manager: CBPeripheralManager!
     private var pending: [String: Any]?
     private var profile: [String: Any]?
     private var chars: [CBUUID: CBMutableCharacteristic] = [:]
     private var values: [CBUUID: Data] = [:]
     private var services: [CBMutableService] = []
-    private var notifications: [Data] = []
+    private struct Notification { let value: Data; let recipient: UUID? }
+    private var notifications: [Notification] = []
+    private var multi = false
+    private var writers: Set<UUID> = []
     private var subscribers: [UUID: CBCentral] = [:]
     private var owner: UUID?
     private var running = false
@@ -19,15 +23,16 @@ final class Peripheral: NSObject, CBPeripheralManagerDelegate {
     private let stateUUID = CBUUID(string: "FFF4")
     private let notifyUUID = CBUUID(string: "FFF1")
 
-    init(controller: BoardController) {
-        self.controller = controller
+    init(controller: BoardController, slot: Int) {
+        self.controller = controller; self.slot = slot
         super.init()
         // Defer permission prompt until the user starts BLE.
     }
-    func start(_ profile: [String: Any]) {
-        stop()
+    private func status(_ message: String, running: Bool) { controller?.status(message, running: running, slot: slot) }
+    func start(_ profile: [String: Any], multi: Bool) {
+        stop(); self.multi = multi
         guard UIApplication.shared.applicationState == .active else {
-            controller?.status("Return to foreground, then Start", running: false); return
+            status("Return to foreground, then Start", running: false); return
         }
         pending = profile
         if manager == nil { manager = CBPeripheralManager(delegate: self, queue: .main) }
@@ -37,15 +42,36 @@ final class Peripheral: NSObject, CBPeripheralManagerDelegate {
         epoch += 1; running = false; pending = nil; profile = nil; publishing = nil
         manager?.stopAdvertising(); manager?.removeAllServices()
         chars.removeAll(); values.removeAll(); services.removeAll()
-        notifications.removeAll(); subscribers.removeAll(); owner = nil
+        notifications.removeAll(); subscribers.removeAll(); writers.removeAll(); owner = nil
+    }
+    func setMulti(_ enabled: Bool) {
+        multi = enabled
+        guard running, publishing == nil, services.isEmpty else { return }
+        if !multi && owner != nil { manager.stopAdvertising() }
+        else { publishNext() }
+        status(enabled ? "Multi-connect: independent transport buffers per controller" : "Exclusive: advertising stops at first observable ATT activity; resume manually after disconnect", running: true)
+    }
+    private func observe(_ central: CBCentral) {
+        writers.insert(central.identifier)
+        if owner == nil { owner = central.identifier }
+        if !multi {
+            manager.stopAdvertising()
+            status("Exclusive: advertising stopped after ATT activity. CoreBluetooth has no UART disconnect event; disconnect, then Resume advertising.", running: true)
+        }
+    }
+    func releaseController() {
+        guard running else { return }
+        for writer in writers { controller?.disconnected(writer, slot: slot) }
+        writers.removeAll(); owner = nil
+        publishNext()
     }
     private func fail(_ message: String) {
-        stop(); controller?.status("BLE error: " + message, running: false)
+        stop(); status("BLE error: " + message, running: false)
     }
     func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
         guard peripheral.state == .poweredOn else {
             if peripheral.state == .unknown || peripheral.state == .resetting {
-                controller?.status("Waiting for Bluetooth state", running: pending != nil); return
+                status("Waiting for Bluetooth state", running: pending != nil); return
             }
             let reason: String
             switch peripheral.state {
@@ -85,8 +111,10 @@ final class Peripheral: NSObject, CBPeripheralManagerDelegate {
         }
         guard let profile = profile, let name = profile["name"] as? String,
               let advertised = profile["advertised"] as? String else { fail("Invalid identity"); return }
-        manager.startAdvertising([CBAdvertisementDataLocalNameKey: name,
-                                  CBAdvertisementDataServiceUUIDsKey: [CBUUID(string: advertised)]])
+        if multi || owner == nil {
+            manager.startAdvertising([CBAdvertisementDataLocalNameKey: name,
+                                      CBAdvertisementDataServiceUUIDsKey: [CBUUID(string: advertised)]])
+        }
     }
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
         guard running, service === publishing else { return }
@@ -97,7 +125,7 @@ final class Peripheral: NSObject, CBPeripheralManagerDelegate {
     func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
         guard running else { return }
         if let error = error { fail("Advertising: \(error.localizedDescription)") }
-        else { controller?.status("Advertising \(profile?["name"] as? String ?? "board") · name/UUID delivery is controlled by iOS", running: true) }
+        else { status("Advertising \(profile?["name"] as? String ?? "board") · name/UUID delivery is controlled by iOS", running: true) }
     }
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
         guard let first = requests.first else { return }
@@ -110,21 +138,21 @@ final class Peripheral: NSObject, CBPeripheralManagerDelegate {
                   characteristic.properties.contains(.write) || characteristic.properties.contains(.writeWithoutResponse) else {
                 peripheral.respond(to: first, withResult: .writeNotPermitted); return
             }
-            if let owner = owner, owner != request.central.identifier {
+            if !multi, let owner = owner, owner != request.central.identifier, !writers.contains(request.central.identifier) {
                 peripheral.respond(to: first, withResult: .unlikelyError)
-                controller?.status("Another controller owns this run. Stop/Start to change controller.", running: true); return
+                status("Another controller owns this run. Stop/Start to change controller.", running: true); return
             }
         }
-        owner = first.central.identifier
+        observe(first.central)
         let generation = epoch
         for request in requests {
-            controller?.receive(request.value ?? Data()) { updates in
+            controller?.receive(request.value ?? Data(), peer: request.central.identifier, token: profile?["runToken"] as? Int ?? 0, slot: slot) { updates in
                 guard self.epoch == generation, self.running else { return }
                 for update in updates {
                     if let value = update["state"] as? [UInt8] { self.values[self.stateUUID] = Data(value) }
                     if let value = update["notify"] as? [UInt8], !self.subscribers.isEmpty {
                         guard self.notifications.count < 128 else { self.fail("Notification queue overflow"); return }
-                        self.notifications.append(Data(value))
+                        self.notifications.append(Notification(value: Data(value), recipient: value.count > 1 && value[1] & 0x80 != 0 ? request.central.identifier : nil))
                     }
                 }
                 self.flush()
@@ -136,6 +164,10 @@ final class Peripheral: NSObject, CBPeripheralManagerDelegate {
         guard running, let c = chars[request.characteristic.uuid], c.properties.contains(.read) else {
             peripheral.respond(to: request, withResult: .readNotPermitted); return
         }
+        if !multi, let owner = owner, owner != request.central.identifier, !writers.contains(request.central.identifier) {
+            peripheral.respond(to: request, withResult: .unlikelyError); return
+        }
+        observe(request.central)
         let generation = epoch
         let respond: (Data) -> Void = { value in
             guard self.epoch == generation else { return }
@@ -143,28 +175,33 @@ final class Peripheral: NSObject, CBPeripheralManagerDelegate {
             request.value = value.subdata(in: request.offset..<value.count)
             peripheral.respond(to: request, withResult: .success)
         }
-        if request.characteristic.uuid == stateUUID { controller?.readState(respond) }
+        if request.characteristic.uuid == stateUUID { controller?.readState(slot: slot, respond) }
         else { respond(values[request.characteristic.uuid] ?? Data()) }
     }
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
         guard running, characteristic.uuid == notifyUUID else { return }
+        if !multi, let owner = owner, owner != central.identifier, !writers.contains(central.identifier) { return }
         subscribers[central.identifier] = central
-        controller?.status("Quantum notifications subscribed · maximum \(central.maximumUpdateValueLength) bytes", running: true)
+        observe(central)
+        status("Quantum notifications subscribed · maximum \(central.maximumUpdateValueLength) bytes", running: true)
     }
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
         subscribers.removeValue(forKey: central.identifier)
-        if owner == central.identifier { owner = nil; controller?.disconnected() }
+        // Unsubscribe is not proof of link loss; never unlock exclusive mode here.
+        controller?.disconnected(central.identifier, slot: slot)
         if subscribers.isEmpty { notifications.removeAll() }
+        status("Unsubscribed; disconnect the controller, then use Resume advertising if exclusive", running: true)
     }
     func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) { flush() }
     private func flush() {
         guard running, let c = chars[notifyUUID] else { return }
-        while let value = notifications.first {
-            let targets = Array(subscribers.values)
-            guard !targets.isEmpty else { notifications.removeAll(); return }
+        while let notification = notifications.first {
+            let value = notification.value
+            let targets = subscribers.values.filter { notification.recipient == nil || $0.identifier == notification.recipient }
+            guard !targets.isEmpty else { notifications.removeFirst(); continue }
             if targets.contains(where: { value.count > $0.maximumUpdateValueLength }) {
                 notifications.removeFirst()
-                controller?.status("Quantum broadcast exceeds negotiated notification size (\(value.count) bytes); fff4 remains readable", running: true)
+                status("Quantum broadcast exceeds negotiated notification size (\(value.count) bytes); fff4 remains readable", running: true)
                 continue
             }
             guard manager.updateValue(value, for: c, onSubscribedCentrals: targets) else { return }

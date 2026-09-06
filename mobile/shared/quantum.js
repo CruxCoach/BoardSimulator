@@ -22,10 +22,13 @@
     return read(tail,0)===crc(a.slice(0,-2));
   }
   class Quantum {
-    constructor(addresses,emit,diagnostic=()=>{}) {
+    constructor(addresses,emit,diagnostic=()=>{},shared={}) {
       this.addresses=addresses; this.emit=emit; this.diagnostic=diagnostic;
-      this.routes=new Map(); this.users=new Map(); this.editor=new Map();
-      this.all=new Map(); this.players=new Map(); this.reset();
+      for(const key of ['routes','users','editor','all','players']) {
+        if(!shared[key])shared[key]=new Map();
+        Object.defineProperty(this,key,{get:()=>shared[key],set:value=>{shared[key]=value;}});
+      }
+      this.reset();
     }
     reset() { this.buffer=[]; this.json=''; this.continuation=null; }
     feed(bytes) {

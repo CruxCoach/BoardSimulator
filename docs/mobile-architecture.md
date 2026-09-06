@@ -6,7 +6,16 @@ service, Web Bluetooth, mocked radio, pairing workflow or app store is required.
 Android 15 advertising and reception from an unidentified external controller
 have been observed; the named-app interoperability matrix remains unverified.
 
-## Decision
+## Current parity follow-up
+
+The original one-board decision below is superseded by the binding parity
+objective. See [the current feature matrix and implementation](mobile-parity.md).
+Two real native endpoints are implemented for disjoint GATT profiles; their
+physical discovery/routing remains experimental. Full duplicate-family and iOS
+exclusive lifecycle parity remain unfulfilled. Historical single-board behavior
+below describes the first release, not the completed objective.
+
+## Initial decision
 
 Keep the working Python/BlueZ/Tk Linux implementation. Android uses Java with
 `BluetoothGattServer` and `BluetoothLeAdvertiser`, iOS uses Swift with
@@ -73,7 +82,7 @@ CoreBluetooth publishes to the local GATT database and exposes no public control
 over multiple independent peripheral addresses or HCI advertising sets. Multiple
 managers are not a supported way to promise separate virtual boards. See
 [CBPeripheralManager](https://developer.apple.com/documentation/corebluetooth/cbperipheralmanager).
-Both mobile UIs therefore explicitly offer one board. Linux retains its existing
+The initial mobile UIs offered one board; the current experimental disjoint mode is described in the parity audit. Linux retains its existing
 multi-adapter and virtual-instance modes; use those or additional phones for
 independent simultaneous boards. Multiple controllers connected to one board
 are a different feature from independently addressable boards.
