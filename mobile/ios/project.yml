@@ -1,0 +1,25 @@
+name: BoardSimulator
+options:
+  bundleIdPrefix: org.cruxcoach
+  deploymentTarget:
+    iOS: '15.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    TARGETED_DEVICE_FAMILY: '1,2'
+targets:
+  BoardSimulator:
+    type: application
+    platform: iOS
+    sources:
+      - BoardSimulator
+      - path: ../shared
+        type: folder
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.cruxcoach.boardsimulator
+        INFOPLIST_FILE: BoardSimulator/Info.plist
+        CODE_SIGN_STYLE: Automatic
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+    scheme: {}

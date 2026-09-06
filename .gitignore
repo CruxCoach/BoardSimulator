@@ -2,3 +2,13 @@ __pycache__/
 *.pyc
 venv/
 .pytest_cache/
+
+# Mobile generated resources and native build outputs
+mobile/shared/generated/
+mobile/android/.gradle/
+mobile/android/**/build/
+mobile/android/local.properties
+mobile/ios/build/
+mobile/ios/*.xcodeproj/
+*.xcuserstate
+mobile/tests/generated-fixtures.json

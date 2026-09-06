@@ -1,0 +1,65 @@
+name: Linux and mobile
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: sudo apt-get update && sudo apt-get install -y python3-tk
+      - run: pip install -r requirements.txt
+      - run: python -m pytest tests/ -q
+      - run: python tools/export_mobile.py
+      - run: python tools/mobile_fixtures.py
+      - run: node mobile/tests/conformance.cjs
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: pip install -r requirements.txt && python tools/export_mobile.py
+      - run: cd mobile/android && ./gradlew assembleDebug lintDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boardsimulator-android-debug
+          path: mobile/android/app/build/outputs/apk/debug/*.apk
+  ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt && python tools/export_mobile.py
+      - run: brew install xcodegen
+      - run: cd mobile/ios && xcodegen generate
+      - name: Compile for physical iPhone without signing
+        run: xcodebuild -project mobile/ios/BoardSimulator.xcodeproj -scheme BoardSimulator -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath mobile/ios/build/device CODE_SIGNING_ALLOWED=NO build
+      - name: Compile for iOS simulator
+        run: xcodebuild -project mobile/ios/BoardSimulator.xcodeproj -scheme BoardSimulator -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath mobile/ios/build/simulator CODE_SIGNING_ALLOWED=NO build
+      - name: Package unsigned device app and simulator app
+        run: |
+          ditto -c -k --keepParent mobile/ios/build/device/Build/Products/Debug-iphoneos/BoardSimulator.app mobile/ios/build/BoardSimulator-unsigned-iphoneos.zip
+          ditto -c -k --keepParent mobile/ios/build/simulator/Build/Products/Debug-iphonesimulator/BoardSimulator.app mobile/ios/build/BoardSimulator-simulator.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boardsimulator-ios-unsigned
+          path: mobile/ios/build/*.zip
