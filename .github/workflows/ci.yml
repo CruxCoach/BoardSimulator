@@ -55,6 +55,14 @@ jobs:
         run: xcodebuild -project mobile/ios/BoardSimulator.xcodeproj -scheme BoardSimulator -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath mobile/ios/build/device CODE_SIGNING_ALLOWED=NO build
       - name: Compile for iOS simulator
         run: xcodebuild -project mobile/ios/BoardSimulator.xcodeproj -scheme BoardSimulator -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath mobile/ios/build/simulator CODE_SIGNING_ALLOWED=NO build
+      - name: Verify iOS resource bundle
+        run: python tools/verify_mobile_bundle.py mobile/ios/build/device/Build/Products/Debug-iphoneos/BoardSimulator.app/shared
+      - name: Select an available iPhone simulator
+        run: |
+          xcrun simctl list devices available -j > /tmp/simulators.json
+          python -c 'import json,os; devices=json.load(open("/tmp/simulators.json"))["devices"]; device=next(d for group in devices.values() for d in group if "iPhone" in d["name"]); open(os.environ["GITHUB_ENV"], "a").write("SIMULATOR_ID="+device["udid"]+"\n")'
+      - name: Launch offline app in iOS simulator
+        run: xcodebuild -project mobile/ios/BoardSimulator.xcodeproj -scheme BoardSimulator -configuration Debug -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath mobile/ios/build/simulator -resultBundlePath mobile/ios/build/LaunchTests.xcresult CODE_SIGNING_ALLOWED=NO test
       - name: Package unsigned device app and simulator app
         run: |
           ditto -c -k --keepParent mobile/ios/build/device/Build/Products/Debug-iphoneos/BoardSimulator.app mobile/ios/build/BoardSimulator-unsigned-iphoneos.zip
@@ -63,3 +71,8 @@ jobs:
         with:
           name: boardsimulator-ios-unsigned
           path: mobile/ios/build/*.zip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-launch-test-results
+          path: mobile/ios/build/LaunchTests.xcresult

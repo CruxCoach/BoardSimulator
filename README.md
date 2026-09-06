@@ -1,8 +1,9 @@
 # BoardSimulator — Consolidated software BLE simulator for all CruxCoach boards
 
 Pure-software simulation of **all eight interactive board families** from
-CruxCoach on Linux via Bluetooth Low Energy (BLE), in a single
-codebase and selectable per CLI:
+CruxCoach via real Bluetooth Low Energy (BLE) peripherals. Linux, Android and
+iOS are developed in this repository; Linux uses the CLI/Tk interface and the
+mobile apps use native BLE with a shared offline board view:
 
 | Board | Protocol | Layouts | Role IDs |
 |-------|----------|---------|----------|
@@ -12,7 +13,7 @@ codebase and selectable per CLI:
 | **Decoy** | Aurora | Dungeon Trainer, Dots | 1–4 |
 | **So iLL** | Aurora | Summer 2024 | 1–4 |
 | **Touchstone** | Aurora | Winter 2020 | 1–4 |
-| **MoonBoard** | NUS/ASCII | 2016, Masters 2017, Masters 2019, Mini 2020 | Token-based |
+| **MoonBoard** | NUS/ASCII | 2016, Masters 2017, Masters 2019, 2024, Mini 2020 | Token-based |
 | **Quantum Board** | CRC16/MODBUS + legacy JSON | XL, L, M, S, Belay | Start / step / finish / route |
 
 The PC acts as a BLE peripheral via the local Bluetooth adapter (BlueZ)
@@ -21,7 +22,62 @@ CruxCoach. Climb frames that are sent are decoded and visualized live —
 either in a Tkinter GUI (board image or board photo) or in headless mode
 as an ASCII grid on stdout.
 
-## Requirements
+## Platform support and test builds
+
+| Platform | Implementation | Build/install status | Simultaneous boards |
+|---|---|---|---|
+| Linux | Python, BlueZ, Tk or headless | Existing runtime; 471 automated tests | Existing multi-adapter / two-instance modes |
+| Android 9+ | Native Java GATT server/advertiser, offline WebView | Debug APK built and lint checked; device tests pending | One independent board per phone |
+| iOS 15+ | Native Swift CoreBluetooth, offline WKWebView | Unsigned device and simulator compilation in macOS CI; signing/device tests pending | One independent board per phone |
+
+All **52 board/layout/size selections** are exported from the Linux registry,
+including Quantum XL/L/M/S Fitness/Belay. Aurora API 2 and 3 are selectable.
+Controllers (CruxCoach or official apps) ordinarily run on another physical
+device. Mobile official-app discovery and physical BLE interoperability are
+**not yet verified**. No mock radio replaces missing peripheral support.
+
+Download test artifacts from [GitHub Actions](https://github.com/CruxCoach/BoardSimulator/actions/workflows/ci.yml):
+`boardsimulator-android-debug` contains the installable debug APK;
+`boardsimulator-ios-unsigned` contains unsigned iPhone and simulator app ZIPs,
+**not a signed, installable iPhone IPA**. Artifact download requires GitHub login.
+The [build/install and hardware validation guide](docs/mobile-testing.md) explains
+local builds, iOS signing with no local Mac, and the outstanding physical matrix.
+The [architecture assessment](docs/mobile-architecture.md) documents native API
+limits, foreground lifecycle, advertisement names and Quantum MTU requirements.
+
+Mobile quick build (Python requirements, JDK 17, Android SDK 35):
+
+```sh
+python tools/export_mobile.py
+cd mobile/android
+./gradlew assembleDebug lintDebug
+# app/build/outputs/apk/debug/app-debug.apk
+```
+
+Stop BLE before changing board/layout/size. Backgrounding stops the mobile
+peripheral; Start resumes with a new session. Android temporarily changes the
+adapter name and restores it on normal Stop. iOS advertisement placement/name
+truncation is controlled by the OS. Multiple advertising sets are not treated as
+independently routable boards; use Linux or multiple phones for that requirement.
+
+## Monorepo layout
+
+```text
+main.py, protocols/, ble/, render/   Existing Linux runtime
+boards.py, data/, assets/            Authoritative registry, geometry, original assets
+mobile/shared/                      Offline UI and shared JavaScript decoders
+mobile/android/                     Java BLE peripheral and Gradle app
+mobile/ios/                         Swift BLE peripheral and XcodeGen project
+mobile/tests/                       Python-vs-JavaScript conformance checks
+tools/export_mobile.py              Generate mobile catalog/geometry/GATT/resources
+tools/mobile_fixtures.py            Generate independent Python protocol traces
+.github/workflows/ci.yml             Linux, Android and macOS/iOS builds
+```
+
+GitHub is the primary repository. Codeberg history and branches were retained;
+automatic mirroring is not configured.
+
+## Linux requirements
 
 - **Python** 3.10+
 - **Linux** with BlueZ
@@ -42,7 +98,7 @@ the apt packages, creates the venv, installs the dependencies and runs a
 `--list` smoke test:
 
 ```bash
-git clone https://codeberg.org/CruxCoach/BoardSimulator.git
+git clone https://github.com/CruxCoach/BoardSimulator.git
 cd BoardSimulator
 ./setup.sh
 ```

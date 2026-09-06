@@ -62,8 +62,8 @@ def export(destination: Path) -> list[dict]:
                     geometry = QuantumGeometry(variant)
                     points = {}
                     for diode in geometry.diodes:
-                        # Match Linux's tablet calibration for the square board image.
-                        points[str(diode.address16)] = geometry.to_pixel(diode, 1, 1, tablet=True)
+                        # Match the existing Linux renderer's eWalls calibration.
+                        points[str(diode.address16)] = geometry.to_pixel(diode, 1, 1)
                         points[str(diode.address32)] = points[str(diode.address16)]
                     item.update(aspect=1, points=points,
                                 addresses=[d.address16 for d in geometry.diodes],

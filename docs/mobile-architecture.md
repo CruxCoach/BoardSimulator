@@ -18,7 +18,7 @@ protocol engine, not the BLE transport. There are no npm runtime dependencies.
 actual session GATT profiles, initial Quantum identity record, normalized
 physical LED coordinates and board-local role palettes for both Aurora API
 levels. Original images and MoonBoard maps are copied byte-for-byte. Quantum
-coordinates use the same tablet calibration as the Linux square board view.
+coordinates use the same calibration as the Linux square board view.
 Missing Aurora photographs use accurate hold dots, as on Linux.
 
 This avoids rewriting Linux, duplicating SQLite queries in Java/Swift, or

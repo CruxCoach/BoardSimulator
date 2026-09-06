@@ -22,4 +22,15 @@ targets:
         CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: 0.1.0
         CURRENT_PROJECT_VERSION: 1
-    scheme: {}
+    scheme:
+      testTargets: [BoardSimulatorUITests]
+  BoardSimulatorUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [BoardSimulatorUITests]
+    dependencies:
+      - target: BoardSimulator
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: BoardSimulator
