@@ -56,9 +56,10 @@ public final class MainActivity extends Activity {
     void refreshAdvertising() {
         for(Peripheral peripheral:peripherals)peripheral.refreshAdvertising();
     }
-    public void receive(int slot, int token, String peer, byte[] data, java.util.function.Consumer<JSONArray> completion) {
+    public void receive(int slot, int token, String peer, byte[] data, boolean withResponse, long atMs, java.util.function.Consumer<JSONArray> completion) {
         JSONArray bytes = new JSONArray(); for (byte b : data) bytes.put(b & 255);
-        web.evaluateJavascript("BLE.receive(" + bytes + ","+JSONObject.quote(peer)+","+token+","+slot+")", value -> {
+        String type = withResponse ? "'request'" : "'command'";
+        web.evaluateJavascript("BLE.receive(" + bytes + ","+JSONObject.quote(peer)+","+token+","+slot+","+type+","+atMs+")", value -> {
             try { completion.accept(new JSONArray(value)); }
             catch (Exception e) { peripherals[slot].stop();status(slot,"Decoder failure: " + e.getMessage(), false); }
         });

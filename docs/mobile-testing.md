@@ -95,6 +95,26 @@ Quantum 2.0.14 and 1.44 commands, CRC failures, multi-chunk routes, multiple use
 route removal/swipe, reconnect, editor layers, JSON and state/notify payloads.
 376 replays vary write fragmentation (1, 7, 20, 512 bytes). This is independent
 Python-vs-JavaScript conformance, not proof of official-app interoperability.
+`controllers.cjs` and `ui.cjs` also cover the Kilter-built LED box (below).
+
+## Kilter-built LED box
+
+Aurora boards offer **LED box: Classic Aurora | Kilter-built**, matching the Linux
+`--controller` option. Kilter-built (the box Kilter ships since mid-2025)
+advertises the bare product name (`Kilter Board`), uses API level 2 (the API and
+serial fields lock) and exposes the RX characteristic as write-with-response only.
+The panel log reports chunks closer than 100 ms (the Kilter app's pacing) once per
+burst and, on Android, a write without response to the write-only RX once per
+central. **Strict 100 ms pacing** drops such chunks after acknowledging them, like
+a box whose parser cannot keep up; use it to prove an app's pacing end to end.
+iOS cannot tell the write type, so only the pacing check runs there.
+
+Checks for a controller app (e.g. CruxCoach 0.2.4 on another phone):
+
+1. Kilter-built + Start: the app lists "Kilter Board" without serial and connects.
+2. Send a climb on a 16 x 12 (size 28): every hold lights, including LEDs above 255.
+3. With strict pacing on, send a long climb and a hold-cleaning frame: no
+   "dropped" lines in the log. CruxCoach 0.2.3 never lists this box at all.
 
 ## Physical validation matrix
 
@@ -124,6 +144,7 @@ GATT discovery, raw RX diagnostics, screenshot and result for each run.
 | Each of the above | Official MoonBoard app | 2016, Masters 2017/2019, 2024, Mini 2020 | Not tested |
 | Each of the above | eWalls | Quantum XL/L/M/S Fitness/Belay | Not tested |
 | Linux | Existing CruxCoach and official-app checks | Existing single/multi-instance behavior | No new physical test |
+| Each of the above | CruxCoach 0.2.4 | Kilter-built LED box, Kilter 16 x 12, strict pacing | Not tested |
 
 For each configuration:
 

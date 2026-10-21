@@ -26,6 +26,62 @@
     }
     disconnect(peer) { this.peers.delete(peer); }
   }
-  root.BoardSession=BoardSession;
-  if(typeof module!=='undefined')module.exports={BoardSession};
+  /* Aurora LED box generations, mirroring the Linux --controller option.
+   * A Kilter-built box (since mid-2025) advertises the bare product name,
+   * speaks API 2 and takes write-with-response only; the Kilter app writes
+   * it in 20-byte chunks 100 ms apart. */
+  const KILTER_BUILT={api:2,gapMs:100};
+  function controllerProfile(selected,controller,serial,api) {
+    const profile=JSON.parse(JSON.stringify(selected));
+    if(profile.family!=='aurora') return profile;
+    if(controller==='kilter-built') {
+      profile.name=profile.boardName;
+      for(const s of profile.services)for(const c of s.characteristics)if(c.write)c.flags=['write'];
+      Object.assign(profile,{controller:'kilter-built',api:KILTER_BUILT.api,minWriteGapMs:KILTER_BUILT.gapMs});
+    } else {
+      profile.name=profile.name.replace(/#0001@3$/,'#'+serial+'@'+api);
+      Object.assign(profile,{controller:'aurora',api,minWriteGapMs:0});
+    }
+    return profile;
+  }
+  /* Same checks as the Linux WriteGuard: a write without response to a
+   * write-only RX is reported once per central (iOS drops such writes);
+   * with a gap set, chunks closer than 75 % of it within one burst (< 1 s)
+   * are reported once per burst, or dropped in strict mode. */
+  class WriteGuard {
+    constructor(flags,minGapMs=0,dropUnpaced=false,report=()=>{}) {
+      this.acceptsCommands=flags.includes('write-without-response');
+      this.minGapMs=minGapMs;this.dropUnpaced=dropUnpaced;this.report=report;
+      this.last=new Map();this.warnedBurst=new Set();this.warnedCommands=new Set();
+      this.unpaced=0;this.dropped=0;
+    }
+    accept(length,writeType,peer,now) {
+      if(writeType==='command'&&!this.acceptsCommands&&!this.warnedCommands.has(peer)) {
+        this.warnedCommands.add(peer);
+        this.report(peer+': writes without response to a write-only characteristic; iOS drops such writes, the Kilter app always writes with response');
+      }
+      if(this.minGapMs<=0)return true;
+      const last=this.last.get(peer),gap=last===undefined?undefined:now-last;
+      if(gap===undefined||gap>=1000) this.warnedBurst.delete(peer);
+      else if(gap<this.minGapMs*0.75) {
+        this.unpaced++;
+        if(this.dropUnpaced) {
+          this.dropped++;this.report(peer+': dropped a '+length+'-byte write '+Math.round(gap)+' ms after the previous one (strict pacing, '+this.minGapMs+' ms expected)');
+          return false;
+        }
+        if(!this.warnedBurst.has(peer)) {
+          this.warnedBurst.add(peer);this.report(peer+': chunks '+Math.round(gap)+' ms apart; this controller expects '+this.minGapMs+' ms (the Kilter app\'s pacing)');
+        }
+      }
+      this.last.set(peer,now);
+      return true;
+    }
+  }
+  function receivingFlags(profile) {
+    for(const s of profile.services||[])for(const c of s.characteristics)if(c.write)return c.flags;
+    return [];
+  }
+  root.BoardSession=BoardSession;root.controllerProfile=controllerProfile;
+  root.WriteGuard=WriteGuard;root.receivingFlags=receivingFlags;
+  if(typeof module!=='undefined')module.exports={BoardSession,controllerProfile,WriteGuard,receivingFlags};
 })(globalThis);

@@ -74,7 +74,8 @@ final class BoardController: UIViewController, WKScriptMessageHandler, WKNavigat
         web.evaluateJavaScript("BLE.status.apply(null,\(json))", completionHandler: nil)
     }
     func receive(_ value: Data, peer: UUID, token: Int, slot: Int, completion: @escaping ([[String: Any]]) -> Void) {
-        web.evaluateJavaScript("BLE.receive(\(Array(value)), \"\(peer.uuidString)\", \(token), \(slot))") { result, error in
+        let atMs = Int(ProcessInfo.processInfo.systemUptime * 1000)
+        web.evaluateJavaScript("BLE.receive(\(Array(value)), \"\(peer.uuidString)\", \(token), \(slot), null, \(atMs))") { result, error in
             if let error = error { self.peripherals[slot].stop(); self.status("Decoder error: \(error.localizedDescription)", running: false, slot: slot) }
             completion(result as? [[String: Any]] ?? [])
         }

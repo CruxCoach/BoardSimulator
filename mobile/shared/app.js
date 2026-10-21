@@ -4,7 +4,7 @@ let nextRunToken=0;
 function createPanel(element,slot) {
 const $=id=>element.querySelector('[id="'+id+'"]');
 let selected,session,holds=[],picture=null,generation=0,active=false;
-let stateValue=[1,71,0,0],lines=[],received=0,runToken=0;
+let stateValue=[1,71,0,0],lines=[],received=0,runToken=0,guard=null;
 function native(command,payload={}) {
   const message=JSON.stringify({command,...payload,slot});
   if(window.Native) window.Native.postMessage(message);
@@ -28,8 +28,9 @@ function cascade(level) {
   const layouts=entries.filter(x=>x.layout===$('layout').value);
   if(level!=='size') options('size',layouts.map(x=>[String(x.size),x.sizeName]),String(layouts[0].defaultSize));
   selected=layouts.find(x=>String(x.size)===$('size').value)||layouts[0];
-  $('apiLabel').hidden=selected.family!=='aurora';$('serialLabel').hidden=selected.family!=='aurora'; $('size').disabled=selected.size===null;
-  $('identity').textContent=selected.name+' · '+selected.advertised;
+  for(const id of ['apiLabel','serialLabel','controllerLabel','strictLabel'])$(id).hidden=selected.family!=='aurora';
+  $('size').disabled=selected.size===null;
+  showController();
   holds=[]; picture=null; const current=++generation;
   if(selected.image) {
     const image=new Image(); image.onload=()=>{if(current===generation){picture=image;draw();}};
@@ -42,6 +43,18 @@ function cascade(level) {
 for(const id of ['board','layout','size']) $(id).onchange=()=>{const restart=active;cascade(id);if(restart)start();};
 $('api').onchange=()=>{if(active)start();};
 $('serial').onchange=()=>{if(active)start();};
+function controller() { return selected.family==='aurora'?$('controller').value:'aurora'; }
+function currentProfile() { return controllerProfile(selected,controller(),$('serial').value,Number($('api').value)); }
+function showController() {
+  // A Kilter-built box has no serial and speaks API 2 only.
+  const built=controller()==='kilter-built';
+  if(built)$('api').value='2';
+  $('api').disabled=built;$('serial').disabled=built;$('strict').disabled=!built;
+  if(!built)$('strict').checked=false;
+  const profile=currentProfile();$('identity').textContent=profile.name+' · '+profile.advertised;
+}
+$('controller').onchange=()=>{showController();if(active)start();};
+$('strict').onchange=()=>{if(active)start();};
 function draw() {
   const canvas=$('canvas'),ctx=canvas.getContext('2d'),box=canvas.getBoundingClientRect(),scale=window.devicePixelRatio||1;
   canvas.width=Math.round(box.width*scale);canvas.height=Math.round(box.height*scale);ctx.scale(scale,scale);
@@ -64,12 +77,12 @@ function setActive(value) {
 }
 $('connections').onchange=()=>native('connections',{multi:$('connections').value==='multi'});
 function start() {
-  if(selected.family==='aurora'&&!$('serial').reportValidity())return;
+  if(selected.family==='aurora'&&controller()==='aurora'&&!$('serial').reportValidity())return;
   received=0; stateValue=[1,71,0,0]; holds=[];
   const emit=value=>{holds=Array.from(new Map(value.map(h=>[h[0],h])).values());draw();};
-  session=new BoardSession(selected,Number($('api').value),emit,log);
-  const profile=JSON.parse(JSON.stringify(selected)); profile.runToken=runToken=++nextRunToken;
-  if(profile.family==='aurora') profile.name=profile.name.replace(/#0001@3$/,'#'+$('serial').value+'@'+$('api').value);
+  const profile=currentProfile(); profile.runToken=runToken=++nextRunToken;
+  session=new BoardSession(selected,profile.api||Number($('api').value),emit,log);
+  guard=new WriteGuard(receivingFlags(profile),profile.minWriteGapMs||0,$('strict').checked,log);
   delete profile.points;delete profile.roles;delete profile.addresses;
   $('identity').textContent=profile.name+' · '+profile.advertised;
   setActive(true); native('start',{profile,multi:$('connections').value==='multi'});
@@ -84,8 +97,9 @@ const api={
   canProbe() { $("probe").hidden=false; },
   canResume() { $("resume").hidden=false; },
   status(message,running) { $('status').textContent=message;log(message);if(typeof running==='boolean')setActive(running); },
-  receive(bytes,peer="default",token=runToken) {
+  receive(bytes,peer="default",token=runToken,writeType=null,atMs=null) {
     if(!session||!active||token!==runToken)return [];
+    if(guard&&!guard.accept(bytes.length,writeType,peer,atMs??performance.now()))return [];
     received+=bytes.length;log('RX '+bytes.length+' B ('+received+' total): '+bytes.map(b=>b.toString(16).padStart(2,'0')).join(''));
     const updates=session.feed(peer,bytes);
     for(const update of updates) if(update.state) stateValue=update.state;
@@ -102,7 +116,7 @@ const template=panels.firstElementChild.cloneNode(true);
 let panelAPIs=[];
 window.BLE={
   status(text,running,slot=0) {if(panelAPIs[slot])panelAPIs[slot].status(text,running);},
-  receive(bytes,peer,token,slot=0) {return panelAPIs[slot]?panelAPIs[slot].receive(bytes,peer,token):[];},
+  receive(bytes,peer,token,slot=0,writeType=null,atMs=null) {return panelAPIs[slot]?panelAPIs[slot].receive(bytes,peer,token,writeType,atMs):[];},
   readState(slot=0) {return panelAPIs[slot]?panelAPIs[slot].readState():[1,71,0,0];},
   disconnected(peer,slot=0) {if(panelAPIs[slot])panelAPIs[slot].disconnected(peer);},
   canProbe() {for(const panel of panelAPIs)panel.canProbe();},

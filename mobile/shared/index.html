@@ -10,6 +10,8 @@
 <label>Board<select id="board"></select></label><label>Layout<select id="layout"></select></label>
 <label>Size<select id="size"></select></label><label id="apiLabel">Aurora API<select id="api"><option>3</option><option>2</option></select></label>
 <label id="serialLabel">Aurora serial<input id="serial" value="0001" pattern="[A-Za-z0-9]{1,8}" maxlength="8" required></label>
+<label id="controllerLabel">LED box<select id="controller" title="Classic Aurora box: Name#serial@API, writes with and without response. Kilter-built box (since mid-2025): bare name, API 2, write-with-response only, 100 ms pacing expected."><option value="aurora">Classic Aurora</option><option value="kilter-built">Kilter-built</option></select></label>
+<label id="strictLabel" title="Drop chunks that arrive less than 100 ms after the previous one, like a box that cannot keep up"><input type="checkbox" id="strict"> Strict 100 ms pacing</label>
 <label>Connections<select id="connections"><option value="single">Exclusive</option><option value="multi">Multi-connect</option></select></label>
 <button id="start">Start BLE</button><button id="stop">Stop</button><button id="resume" hidden>Resume advertising after disconnect</button></section>
 <p id="identity"></p><p id="capability">Independent state per board; controller fragment buffers are isolated. Duplicate/overlapping GATT profiles are rejected.</p>

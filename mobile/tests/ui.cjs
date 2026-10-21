@@ -39,8 +39,31 @@ const fixtures=require('./generated-fixtures.json');
   await panels.nth(1).locator('[id=connections]').selectOption('multi');
   const mode=await page.evaluate(()=>messages.at(-1));
   assert.deepEqual(mode,{command:'connections',multi:true,slot:1});
+  // Kilter-built LED box: bare name, API 2 only, write-only RX, strict pacing drops a fast chunk.
+  const kilter=panels.nth(0);
+  await kilter.locator('[id=board]').selectOption('kilter');
+  await kilter.locator('[id=controller]').selectOption('kilter-built');
+  assert.equal(await kilter.locator('[id=api]').inputValue(),'2');
+  assert.equal(await kilter.locator('[id=api]').isDisabled(),true);
+  assert.equal(await kilter.locator('[id=serial]').isDisabled(),true);
+  assert.match(await kilter.locator('[id=identity]').textContent(),/^Kilter Board · /);
+  await kilter.locator('[id=strict]').check();
+  const builtStart=await page.evaluate(()=>messages.filter(m=>m.command==='start'&&m.slot===0).at(-1));
+  assert.equal(builtStart.profile.name,'Kilter Board');
+  const rx=builtStart.profile.services.flatMap(s=>s.characteristics).find(c=>c.write);
+  assert.deepEqual(rx.flags,['write']);
+  const v2=fixtures.find(t=>t.id==='kilter/original/10'&&t.api===2);
+  // The trace ends with two complete single-packet climbs and a clear.
+  const message=v2.writes.at(-2),clear=v2.writes.at(-1);
+  await page.evaluate(({message,clear,token})=>{
+    BLE.status('Browser test: mock transport',true,0);
+    BLE.receive(message,'kilter-central',token,0,'request',1000);
+    BLE.receive(clear,'kilter-central',token,0,'request',1010);
+  },{message,clear,token:builtStart.profile.runToken});
+  assert.notEqual(await kilter.locator('[id=count]').textContent(),'0 lit holds','the clear 10 ms later must be dropped');
+  assert.match(await kilter.locator('[id=log]').textContent(),/dropped a 6-byte write 10 ms/);
   if(process.env.UI_SCREENSHOT)await page.screenshot({path:process.env.UI_SCREENSHOT,fullPage:true});
   assert.deepEqual(errors,[]);
-  console.log('Two-panel UI: routed reception, isolated rendering, runtime switch generation guard and independent modes passed (mock transport only)');
+  console.log('Two-panel UI: routed reception, isolated rendering, runtime switch generation guard, independent modes and the Kilter-built box passed (mock transport only)');
   await browser.close();
 })().catch(e=>{console.error(e);process.exit(1);});

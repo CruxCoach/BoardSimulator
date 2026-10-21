@@ -208,12 +208,14 @@ final class Peripheral {
             @Override public void onMtuChanged(BluetoothDevice d,int value) {post(() -> {if(links.containsKey(d))links.get(d).mtu=value;});}
             @Override public void onCharacteristicWriteRequest(BluetoothDevice d,int request,BluetoothGattCharacteristic c,boolean prepared,boolean response,int offset,byte[] value) {
                 byte[] copy=value.clone();
+                // Arrival time for the pacing check, taken before the main-thread hop.
+                long at=android.os.SystemClock.elapsedRealtime();
                 post(() -> {
                     int result=prepared?BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED:offset!=0?BluetoothGatt.GATT_INVALID_OFFSET:
                         !assign(d)?BluetoothGatt.GATT_FAILURE:BluetoothGatt.GATT_SUCCESS;
                     if(response) server.sendResponse(d,request,result,offset,null);
                     Link link=links.get(d);
-                    if(result==BluetoothGatt.GATT_SUCCESS) activity.receive(slot,runToken,d.getAddress(),copy, updates -> {
+                    if(result==BluetoothGatt.GATT_SUCCESS) activity.receive(slot,runToken,d.getAddress(),copy,response,at, updates -> {
                         if(generation!=epoch || links.get(d)!=link)return;
                         try {
                             for(int i=0;i<updates.length();i++) {

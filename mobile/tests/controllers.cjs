@@ -1,7 +1,7 @@
 'use strict';
 const assert=require('node:assert/strict');
 require('../shared/protocols.js');require('../shared/quantum.js');
-const {BoardSession}=require('../shared/session.js');
+const {BoardSession,controllerProfile,WriteGuard,receivingFlags}=require('../shared/session.js');
 const fixtures=require('./generated-fixtures.json');
 const catalog=require('../shared/generated/catalog.json');
 const profile=catalog.find(p=>p.id==='kilter/original/10');
@@ -43,4 +43,30 @@ for(const profile of catalog.filter(p=>p.family==='quantum')) {
   assert.equal(first.stateValue[2],2,'Disconnect preserves board roster');
   assert.deepEqual(independent.stateValue,[1,71,0,0]);
 }
+// Kilter-built LED box: bare name, API 2, write-only RX; the catalog stays untouched.
+const built=controllerProfile(profile,'kilter-built','0001',3);
+assert.equal(built.name,profile.boardName);assert.equal(built.name,'Kilter Board');
+assert.equal(built.api,2);assert.equal(built.minWriteGapMs,100);
+assert.deepEqual(receivingFlags(built),['write']);
+assert.deepEqual(receivingFlags(profile),['write','write-without-response'],'catalog entry must not change');
+assert.equal(controllerProfile(profile,'aurora','b002',2).name,'Kilter Board#b002@2');
+const moon=catalog.find(p=>p.family==='moonboard');
+assert.equal(controllerProfile(moon,'kilter-built','0001',3).name,moon.name,'only Aurora boards have controller generations');
+// Write guard: same rules as the Linux WriteGuard.
+let reports=[];const paced=new WriteGuard(['write'],100,false,m=>reports.push(m));
+for(const at of [0,100,200,280])assert.ok(paced.accept(20,'request','A',at));
+assert.equal(paced.unpaced,0,'80 ms is within the 75 % tolerance');
+for(const at of [285,290])paced.accept(20,'request','A',at);
+paced.accept(20,'request','A',3000);paced.accept(20,'request','A',3005);
+assert.equal(paced.unpaced,3);assert.equal(reports.filter(r=>r.includes('expects 100 ms')).length,2,'one report per burst');
+const strict=new WriteGuard(['write'],100,true,()=>{});
+assert.ok(strict.accept(20,'request','A',0));assert.ok(!strict.accept(20,'request','A',10));
+assert.ok(strict.accept(20,'request','B',10),'centrals are paced independently');
+assert.ok(strict.accept(20,'request','A',105),'gap counts from the last accepted chunk');assert.equal(strict.dropped,1);
+reports=[];const commands=new WriteGuard(['write'],0,false,m=>reports.push(m));
+commands.accept(20,'command','A',0);commands.accept(20,'command','A',1);
+assert.equal(reports.length,1,'write without response to a write-only RX is reported once per central');
+reports=[];new WriteGuard(['write','write-without-response'],0,false,m=>reports.push(m)).accept(20,'command','A',0);
+assert.equal(reports.length,0);
 console.log('Interleaved controllers: independent frame buffers, disconnect isolation, Quantum shared roster/layers and independent boards passed');
+console.log('Kilter-built box: bare name, API 2, write-only RX and write-guard pacing passed');
