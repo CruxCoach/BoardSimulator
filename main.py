@@ -110,6 +110,23 @@ def _parse_args() -> argparse.Namespace:
              f"(default: {config.BOARD_SERIAL}); Aurora-protocol boards only.",
     )
     parser.add_argument(
+        "--controller", default=None, choices=config.CONTROLLERS,
+        help="Aurora LED controller generation. 'aurora' (default) is the "
+             "classic box: name 'Name#serial@apiLevel', RX takes writes with "
+             "and without response. 'kilter-built' is the box Kilter ships "
+             "since mid-2025: bare name (e.g. 'Kilter Board'), API level 2, "
+             "write-with-response only; chunks closer than the Kilter app's "
+             f"{config.KILTER_APP_CHUNK_GAP_MS} ms are reported. "
+             "Aurora-protocol boards only.",
+    )
+    parser.add_argument(
+        "--strict-pacing", action="store_true",
+        help="With --controller kilter-built: drop chunks that arrive sooner "
+             f"than {config.KILTER_APP_CHUNK_GAP_MS} ms after the previous "
+             "one, like a box whose parser cannot keep up. Proves an app's "
+             "pacing end to end.",
+    )
+    parser.add_argument(
         "--instances", type=int, choices=(1, 2), default=1,
         help="Virtual boards on this adapter; two use simultaneous hardware "
              "advertising (default: %(default)s).",
@@ -168,12 +185,14 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _build_session(sel, api_level, serial):
+def _build_session(sel, api_level, serial, controller=None,
+                   strict_pacing=False):
     """Resolve a :class:`Selection` into ``(board, variant, session)``.
 
-    ``api_level``/``serial`` are Aurora-only knobs; they are dropped for a
-    MoonBoard selection (``create_session`` rejects them there), so a board
-    switch onto the MoonBoard never trips the option guard.
+    ``api_level``/``serial``/``controller``/``strict_pacing`` are
+    Aurora-only knobs; they are dropped for a MoonBoard or Quantum
+    selection (``create_session`` rejects them there), so a board switch
+    onto those never trips the option guard.
     """
     from protocols.session import create_session
 
@@ -184,6 +203,8 @@ def _build_session(sel, api_level, serial):
         board, variant, sel.size_id,
         api_level if aurora else None,
         serial if aurora else None,
+        controller if aurora else None,
+        strict_pacing if aurora else False,
     )
     return board, variant, session
 
@@ -295,7 +316,8 @@ def _run_headless_multi(sessions: list, multi_connect: bool,
 def _run_gui(selection, second_selection, api_level, serial, second_serial,
              multi_connect: bool, instance_count: int = 1,
              adapter: str = DEFAULT_ADAPTER, window_height: int | None = None,
-             fullscreen: bool = False) -> int:
+             fullscreen: bool = False, controller: str | None = None,
+             strict_pacing: bool = False) -> int:
     """GUI mode: ONE persistent Tk root; a board-bar pick tears down the
     current panel + BLE peripheral and rebuilds them for the new board.
 
@@ -385,7 +407,8 @@ def _run_gui(selection, second_selection, api_level, serial, second_serial,
         count = state["count"]
         serials = [serial, second_serial]
         resolved = [
-            _build_session(state["selections"][slot], api_level, serials[slot])
+            _build_session(state["selections"][slot], api_level, serials[slot],
+                           controller, strict_pacing)
             for slot in range(count)
         ]
         sessions = [item[2] for item in resolved]
@@ -486,18 +509,32 @@ def main() -> int:
     if second_layout is None and args.second_board is None:
         second_layout = args.layout
     second_sel = Selection(second_board_key, second_layout, args.second_size)
+    kilter_built = args.controller == config.CONTROLLER_KILTER_BUILT
     first_serial = args.serial or config.BOARD_SERIAL
-    second_serial = args.second_serial or _next_serial(first_serial)
+    # A Kilter-built box has no serial; two of them advertise the same bare
+    # name and differ only by address, as two new boards in one gym do.
+    second_serial = (args.second_serial if kilter_built
+                     else args.second_serial or _next_serial(first_serial))
     try:
-        board, variant, session = _build_session(sel, args.api_level, args.serial)
+        board, variant, session = _build_session(
+            sel, args.api_level, args.serial, args.controller,
+            args.strict_pacing)
         second_board, second_variant, second_session = _build_session(
-            second_sel, args.api_level, second_serial)
+            second_sel, args.api_level, second_serial, args.controller,
+            args.strict_pacing)
     except ValueError as exc:
         logger.error("%s", exc)
+        return 2
+    if ((args.controller or args.strict_pacing)
+            and PROTOCOL_AURORA not in (board.protocol, second_board.protocol
+                                        if args.instances == 2 else None)):
+        logger.error("--controller/--strict-pacing only applies to "
+                     "Aurora-protocol boards, not %s", board.display_name)
         return 2
     if (board.protocol == PROTOCOL_AURORA
             and second_board.protocol == PROTOCOL_AURORA
             and board.key == second_board.key
+            and not kilter_built
             and session.ble_name == second_session.ble_name):
         logger.error("the two virtual boards have the same Aurora identity; "
                      "choose a distinct --second-serial")
@@ -510,6 +547,10 @@ def main() -> int:
     logger.info("Board Simulator starting")
     logger.info("Board: %s — %s [%s protocol]", board.display_name,
                 variant.display_name, board.protocol)
+    if board.protocol == PROTOCOL_AURORA:
+        logger.info("Controller: %s, advertised as '%s'%s", session.controller,
+                    session.ble_name,
+                    " (strict pacing)" if args.strict_pacing else "")
     logger.info("Mode: %s", "headless" if headless else "GUI")
     logger.info("Adapter: %s", args.adapter)
     logger.info("Virtual boards: %d", args.instances)
@@ -536,7 +577,7 @@ def main() -> int:
         return _run_gui(
             sel, second_sel, args.api_level, args.serial, second_serial,
             multi, args.instances, args.adapter, args.window_height,
-            args.fullscreen)
+            args.fullscreen, args.controller, args.strict_pacing)
     finally:
         logger.info("Goodbye")
 

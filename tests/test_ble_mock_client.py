@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """BLE mock client that connects to a running simulator and sends a climb.
 
-Usage: python tests/test_ble_mock_client.py [board-key]
+Usage: python tests/test_ble_mock_client.py [board-key] [--kilter-built]
        (board-key: kilter | tension | grasshopper | decoy | soill |
         touchstone | moonboard | quantum, default kilter; must match the running
-        simulator's --board)
+        simulator's --board. --kilter-built matches a simulator started with
+        --controller kilter-built: bare name, API level 2, and it writes like
+        the Kilter app — with response, 100 ms apart)
 
 Requires the simulator (main.py) to be running first. Uses bleak as a
 BLE central to scan (matching exactly like CruxCoach's BoardBleScanner),
@@ -46,7 +48,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 
-def build_aurora_chunks(board_key: str) -> list[bytes]:
+def build_aurora_chunks(board_key: str, api_level: int = 3) -> list[bytes]:
     """Encode a small sample climb in the board's own role colours.
 
     Picks the first three placements of the default layout/size and encodes
@@ -68,14 +70,14 @@ def build_aurora_chunks(board_key: str) -> list[bytes]:
     ]
     logger.info("Sample climb: %s", [(p, geometry.roles[r].name)
                                      for p, r in zip(placements, role_ids[:3])])
-    return encode_climb(holds, api_level=3)
+    return encode_climb(holds, api_level=api_level)
 
 
-def build_chunks(board_key: str) -> list[bytes]:
+def build_chunks(board_key: str, kilter_built: bool = False) -> list[bytes]:
     """The BLE writes for one sample climb, per protocol family."""
     board = board_for(board_key)
     if board.protocol == PROTOCOL_AURORA:
-        return build_aurora_chunks(board_key)
+        return build_aurora_chunks(board_key, api_level=2 if kilter_built else 3)
     if board.protocol == PROTOCOL_QUANTUM:
         from protocols.quantum import (Command, EWALLS_ROUTE_DURATION_SECONDS,
                                        encode_chunks)
@@ -104,17 +106,21 @@ async def main() -> None:
         logger.error("bleak not installed — run: pip install bleak")
         sys.exit(1)
 
-    board_key = sys.argv[1] if len(sys.argv) > 1 else "kilter"
+    args = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
+    kilter_built = "--kilter-built" in sys.argv[1:]
+    board_key = args[0] if args else "kilter"
     board = board_for(board_key)
-    chunks = build_chunks(board_key)
+    chunks = build_chunks(board_key, kilter_built)
 
     logger.info("Scanning for a fake %s...", board.display_name)
 
     def _match(device, adv) -> bool:
         name = (device.name or adv.local_name or "")
         if board.protocol == PROTOCOL_AURORA:
-            # Aurora names are 'Name#serial@apiLevel'; brand from the name.
-            if "@" not in name and "#" not in name:
+            # Classic boxes: 'Name#serial@apiLevel'. Kilter-built boxes: the
+            # bare product name. Brand from the name either way.
+            suffixed = "@" in name or "#" in name
+            if suffixed == kilter_built:
                 return False
             return cruxcoach_brand_prefix_match(name, board.cruxcoach_prefix)
         if board.protocol == PROTOCOL_QUANTUM:
@@ -155,10 +161,11 @@ async def main() -> None:
                               else RX_CHARACTERISTIC_UUID)
             # CruxCoach currently uses a write request for Quantum. Exercise
             # that transport choice without treating it as a hardware claim.
+            # A Kilter-built box takes write requests only, 100 ms apart.
             await client.write_gatt_char(
                 characteristic, chunk,
-                response=(board.protocol == PROTOCOL_QUANTUM))
-            await asyncio.sleep(0.05)
+                response=(board.protocol == PROTOCOL_QUANTUM or kilter_built))
+            await asyncio.sleep(0.1 if kilter_built else 0.05)
 
         logger.info("Climb sent — check the simulator window / log.")
         await asyncio.sleep(3.0)

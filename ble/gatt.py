@@ -16,6 +16,7 @@ reads through ``GetManagedObjects``:
 # NOTE: no `from __future__ import annotations` here — dbus_fast reads
 # the D-Bus signatures from live method annotations at decoration time.
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -43,6 +44,11 @@ class CharacteristicSpec:
     flags: tuple[str, ...]
     receives_writes: bool = False
     initial_value: bytes = b""
+    # Pacing a controller expects between writes (Kilter-built box: the
+    # Kilter app's 100 ms); 0 = no check. See :class:`WriteGuard`.
+    min_write_gap_ms: int = 0
+    # Drop a write that arrives sooner, like a parser that cannot keep up.
+    drop_unpaced: bool = False
 
 
 @dataclass(frozen=True)
@@ -75,6 +81,72 @@ class GattUpdate:
     read_value: bytes | None = None
 
 
+class WriteGuard:
+    """Checks the writes one characteristic receives against its controller.
+
+    - A write without response ("command") to a characteristic without the
+      write-without-response flag is reported once per central: Android
+      delivers it, iOS drops it on the sending side, so an app that relies
+      on it lights nothing on iOS.
+    - With ``min_gap_ms`` set, a write arriving sooner than that after the
+      previous accepted one of the same burst is reported, or dropped when
+      ``drop_unpaced`` is set (the box is still busy with the last chunk).
+      BLE connection intervals jitter arrivals, so 75 % of the gap counts.
+    """
+
+    BURST_MS = 1000.0
+    TOLERANCE = 0.75
+
+    def __init__(self, flags, min_gap_ms: int = 0, drop_unpaced: bool = False,
+                 clock: Callable[[], float] = time.monotonic):
+        self.accepts_commands = "write-without-response" in flags
+        self.min_gap_ms = min_gap_ms
+        self.drop_unpaced = drop_unpaced
+        self._clock = clock
+        self._last_accepted: dict[str | None, float] = {}
+        self._warned_burst: set[str | None] = set()
+        self._warned_commands: set[str | None] = set()
+        self.unpaced = 0
+        self.dropped = 0
+
+    def accept(self, length: int, write_type: str | None, peer: str | None) -> bool:
+        who = peer or "a central"
+        if (write_type == "command" and not self.accepts_commands
+                and peer not in self._warned_commands):
+            self._warned_commands.add(peer)
+            logger.warning(
+                "%s writes without response to a write-only characteristic; "
+                "iOS drops such writes, the Kilter app always writes with response",
+                who)
+        if self.min_gap_ms <= 0:
+            return True
+        now = self._clock()
+        last = self._last_accepted.get(peer)
+        gap_ms = None if last is None else (now - last) * 1000.0
+        if gap_ms is None or gap_ms >= self.BURST_MS:
+            self._warned_burst.discard(peer)
+        elif gap_ms < self.min_gap_ms * self.TOLERANCE:
+            self.unpaced += 1
+            if self.drop_unpaced:
+                self.dropped += 1
+                logger.warning(
+                    "dropped a %d-byte write %.0f ms after the previous one "
+                    "(strict pacing, %d ms expected)", length, gap_ms, self.min_gap_ms)
+                return False
+            if peer not in self._warned_burst:
+                self._warned_burst.add(peer)
+                logger.warning(
+                    "%s sends chunks %.0f ms apart; this controller expects %d ms "
+                    "(the Kilter app's pacing)", who, gap_ms, self.min_gap_ms)
+        self._last_accepted[peer] = now
+        return True
+
+
+def _option(options, key: str):
+    raw = options.get(key)
+    return getattr(raw, "value", raw)
+
+
 # ---------------------------------------------------------------------------
 # D-Bus GATT objects (BlueZ reads these through GetManagedObjects)
 # ---------------------------------------------------------------------------
@@ -83,8 +155,10 @@ class GattCharacteristic(ServiceInterface):
     """A single GATT characteristic exposed over D-Bus."""
 
     def __init__(self, index: int, uuid: str, flags: list[str],
-                 service_path: str, initial_value: bytes = b""):
+                 service_path: str, initial_value: bytes = b"",
+                 min_write_gap_ms: int = 0, drop_unpaced: bool = False):
         self.path = f"{service_path}/char{index}"
+        self.write_guard = WriteGuard(flags, min_write_gap_ms, drop_unpaced)
         self._uuid = uuid
         self._flags = flags
         self._service_path = service_path
@@ -124,11 +198,13 @@ class GattCharacteristic(ServiceInterface):
 
     @method()
     def WriteValue(self, value: "ay", options: "a{sv}") -> None:  # type: ignore  # noqa: N802
+        device = _option(options, "device")
+        peer = str(device) if device else None
+        if not self.write_guard.accept(len(value), _option(options, "type"), peer):
+            return
         self._value = bytearray(value)
         if self.write_callback:
-            device_option = options.get("device")
-            device = getattr(device_option, "value", device_option)
-            self.write_callback(bytes(value), str(device) if device else None)
+            self.write_callback(bytes(value), peer)
 
     @method()
     def StartNotify(self) -> None:  # type: ignore  # noqa: N802
@@ -270,7 +346,8 @@ def build_application(profile: GattProfile,
         for char_index, char_spec in enumerate(svc_spec.characteristics):
             char = GattCharacteristic(
                 char_index, char_spec.uuid, list(char_spec.flags), service.path,
-                char_spec.initial_value)
+                char_spec.initial_value, char_spec.min_write_gap_ms,
+                char_spec.drop_unpaced)
             if char_spec.receives_writes:
                 char.write_callback = on_data
             service.characteristics.append(char)
@@ -301,6 +378,9 @@ def merge_profiles(profiles: list[GattProfile]) -> GattProfile:
                                          or char.receives_writes),
                         initial_value=(previous.initial_value
                                        or char.initial_value),
+                        min_write_gap_ms=max(previous.min_write_gap_ms,
+                                             char.min_write_gap_ms),
+                        drop_unpaced=previous.drop_unpaced or char.drop_unpaced,
                     )
     return GattProfile(
         description=" + ".join(dict.fromkeys(p.description for p in profiles)),

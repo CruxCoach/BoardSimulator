@@ -162,6 +162,13 @@ sudo venv/bin/python main.py --board quantum --layout xl
 # So iLL in headless mode
 sudo venv/bin/python main.py --board soill --headless
 
+# A Kilter-built box (since mid-2025): bare name "Kilter Board", API 2,
+# write-with-response only — here as the 16x12 Super Wide
+sudo venv/bin/python main.py --board kilter --size 28 --controller kilter-built
+
+# …and drop chunks closer than 100 ms, to prove an app's pacing
+sudo venv/bin/python main.py --controller kilter-built --strict-pacing
+
 # List all boards/layouts/sizes (no BLE, no root needed)
 python main.py --list
 ```
@@ -173,6 +180,8 @@ python main.py --list
 | `--size` | layout default | Aurora `product_size_id` (see `--list`) — Aurora boards only |
 | `--api-level` | `3` | Aurora protocol version (`2` or `3`), suffix `@N` in the BLE name — Aurora boards only |
 | `--serial` | `0001` | Serial number, suffix `#serial` in the BLE name — Aurora boards only |
+| `--controller` | `aurora` | LED box generation: `aurora` (classic, `Name#serial@apiLevel`, writes with and without response) or `kilter-built` (bare name, API 2, write-with-response only, chunks closer than 100 ms are reported) — Aurora boards only |
+| `--strict-pacing` | off | With `--controller kilter-built`: drop chunks that arrive sooner than 100 ms after the previous one |
 | `--instances` | `1` | Simulate one or two virtual boards on the selected adapter |
 | `--second-board` | same as board 1 | Initial board for slot 2 |
 | `--second-layout` | same/default | Initial layout for slot 2 |
@@ -281,6 +290,7 @@ source venv/bin/activate
 pip install bleak   # only needed for the mock client
 python tests/test_ble_mock_client.py kilter      # or tension, moonboard, ...
 python tests/test_ble_mock_client.py quantum
+python tests/test_ble_mock_client.py kilter --kilter-built   # bare name, API 2, paced
 ```
 
 The test client scans using the same naming rules as CruxCoach, connects
@@ -342,6 +352,24 @@ exclusively in the advertised name:
 - **CruxCoach 0.2.0** parses `Name#serial@apiLevel`, normalizes the name
   part (lowercase, strip spaces/hyphens) and matches the brand
   **prefix**; Kilter is the fallback for any unrecognized Aurora name.
+  CruxCoach 0.2.4 also accepts a bare name with an Aurora family prefix
+  or the advertised discovery service.
+
+**Two controller generations** (`--controller`):
+
+| | `aurora` (classic box) | `kilter-built` (since mid-2025) |
+|---|---|---|
+| Advertised name | `Kilter Board#0001@3` | `Kilter Board` (no serial, no API level) |
+| API level | `@N` suffix, default 3 here | 2 (what apps assume without `@3`) |
+| RX characteristic | write + write-without-response | write (with response) only |
+| Pacing | none expected | the Kilter app writes 20-byte chunks 100 ms apart; faster chunks are logged, `--strict-pacing` drops them |
+
+A write without response to the write-only RX is logged once per central:
+Android delivers it, but iOS drops it on the sending side, so an app that
+relies on it stays dark on iOS. Two `kilter-built` instances advertise the
+same name and differ only by address — like two new boards in one gym.
+The behaviour is taken from Boardsesh's field telemetry and the official
+Kilter app; it is not a capture of a physical Kilter-built box.
 
 | Purpose | UUID |
 |---------|------|

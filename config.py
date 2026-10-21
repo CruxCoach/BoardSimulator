@@ -55,6 +55,28 @@ def aurora_ble_name(display_name: str, serial: str = BOARD_SERIAL,
     return f"{display_name}#{serial}@{api_level}"
 
 
+# Aurora controller generations. The classic Aurora box advertises
+# 'Name#serial@apiLevel' and takes writes with and without response.
+# Kilter-built boxes (shipped since mid-2025) advertise only the bare
+# product name ("Kilter Board"), speak API level 2 and take
+# write-with-response only; the Kilter app writes them in 20-byte chunks
+# 100 ms apart (Boardsesh field telemetry: RX properties = 8).
+CONTROLLER_AURORA: str = "aurora"
+CONTROLLER_KILTER_BUILT: str = "kilter-built"
+CONTROLLERS: tuple[str, ...] = (CONTROLLER_AURORA, CONTROLLER_KILTER_BUILT)
+KILTER_BUILT_API_LEVEL: int = 2
+KILTER_APP_CHUNK_GAP_MS: int = 100
+
+
+def kilter_built_ble_name(display_name: str) -> str:
+    """The bare name a Kilter-built box advertises: no serial, no API level.
+
+    Apps that only parse 'Name#serial@apiLevel' never list such a box;
+    the official app finds it by the advertised Aurora service.
+    """
+    return display_name
+
+
 # ── MoonBoard ────────────────────────────────────────────────────────────
 
 # MoonBoard scanners filter on the name prefix "MoonBoard" (no Aurora

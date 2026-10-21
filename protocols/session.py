@@ -46,6 +46,37 @@ AURORA_GATT_PROFILE = GattProfile(
     ),
 )
 
+
+
+def kilter_built_gatt_profile(strict_pacing: bool = False) -> GattProfile:
+    """The GATT shape of a Kilter-built box (since mid-2025).
+
+    Same services as the classic Aurora box, but the RX characteristic
+    takes write-with-response only, and the box is driven in chunks
+    ``KILTER_APP_CHUNK_GAP_MS`` apart. ``strict_pacing`` drops writes that
+    arrive sooner, to prove an app's pacing end to end.
+    """
+    return GattProfile(
+        description="discovery + UART service (Kilter-built box, write-only RX)",
+        advertised_uuid=config.AURORA_ADVERTISING_SERVICE_UUID,
+        services=(
+            ServiceSpec(uuid=config.AURORA_ADVERTISING_SERVICE_UUID),
+            ServiceSpec(
+                uuid=config.UART_SERVICE_UUID,
+                characteristics=(
+                    CharacteristicSpec(
+                        uuid=config.RX_CHARACTERISTIC_UUID,
+                        flags=("write",),
+                        receives_writes=True,
+                        min_write_gap_ms=config.KILTER_APP_CHUNK_GAP_MS,
+                        drop_unpaced=strict_pacing,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
 # A MoonBoard exposes ONLY the Nordic UART Service and advertises that
 # service's UUID itself. TX is a notify-only stub a real board pushes
 # on; the apps only ever write, so nothing is sent.
@@ -162,7 +193,9 @@ class AuroraSession(Session):
     """Kilter + the five Aurora-family boards: binary packets, LED map."""
 
     def __init__(self, board: Board, variant, size_id: int,
-                 api_level: int, serial: str) -> None:
+                 api_level: int, serial: str,
+                 controller: str = config.CONTROLLER_AURORA,
+                 strict_pacing: bool = False) -> None:
         # Imported here so MoonBoard-only runs never touch sqlite assets.
         from board_geometry import BoardGeometry
         from protocols.aurora_decoder import ProtocolDecoder
@@ -170,6 +203,7 @@ class AuroraSession(Session):
 
         self.board = board
         self.variant = variant
+        self.controller = controller
         self.api_level = api_level
         self.geometry = BoardGeometry(board, variant, size_id)
         self.resolver = RoleColorResolver(self.geometry.roles, api_level=api_level)
@@ -177,9 +211,13 @@ class AuroraSession(Session):
         self._decoder = ProtocolDecoder(
             api_level=api_level, on_message=self.state.update)
 
-        self.ble_name = config.aurora_ble_name(
-            board.display_name, serial, api_level)
-        self.gatt_profile = AURORA_GATT_PROFILE
+        if controller == config.CONTROLLER_KILTER_BUILT:
+            self.ble_name = config.kilter_built_ble_name(board.display_name)
+            self.gatt_profile = kilter_built_gatt_profile(strict_pacing)
+        else:
+            self.ble_name = config.aurora_ble_name(
+                board.display_name, serial, api_level)
+            self.gatt_profile = AURORA_GATT_PROFILE
         self.window_title = (
             f"{board.display_name} Simulator — "
             f"{variant.display_name} / {self.geometry.size.name}"
@@ -335,24 +373,44 @@ class QuantumSession(Session):
 
 
 def create_session(board: Board, variant, size_id: int | None,
-                   api_level: int | None, serial: str | None) -> Session:
+                   api_level: int | None, serial: str | None,
+                   controller: str | None = None,
+                   strict_pacing: bool = False) -> Session:
     """Build the right session for a board's protocol family.
 
-    Aurora-only options (--size, --api-level, --serial) raise on a
-    MoonBoard rather than being silently ignored.
+    Aurora-only options (--size, --api-level, --serial, --controller,
+    --strict-pacing) raise on a MoonBoard or Quantum rather than being
+    silently ignored. A Kilter-built controller has no serial and speaks
+    API level 2 only, so --serial or --api-level 3 raise there too.
     """
     if board.protocol == PROTOCOL_AURORA:
         if size_id is None:
             size_id = variant.default_size_id
+        controller = controller or config.CONTROLLER_AURORA
+        if controller not in config.CONTROLLERS:
+            raise ValueError(f"unknown controller '{controller}'")
+        if controller == config.CONTROLLER_KILTER_BUILT:
+            if serial is not None:
+                raise ValueError(
+                    "a Kilter-built controller advertises no serial; drop --serial")
+            if api_level not in (None, config.KILTER_BUILT_API_LEVEL):
+                raise ValueError(
+                    "a Kilter-built controller speaks API level "
+                    f"{config.KILTER_BUILT_API_LEVEL} only")
+            api_level = config.KILTER_BUILT_API_LEVEL
+        elif strict_pacing:
+            raise ValueError("--strict-pacing needs --controller kilter-built")
         return AuroraSession(
             board, variant, size_id,
             api_level if api_level is not None else config.API_LEVEL,
             serial if serial is not None else config.BOARD_SERIAL,
+            controller, strict_pacing,
         )
     if board.protocol == PROTOCOL_MOONBOARD:
         rejected = [name for name, value in (
             ("--size", size_id), ("--api-level", api_level),
-            ("--serial", serial)) if value is not None]
+            ("--serial", serial), ("--controller", controller),
+            ("--strict-pacing", strict_pacing or None)) if value is not None]
         if rejected:
             raise ValueError(
                 f"{', '.join(rejected)} only applies to Aurora-protocol "
@@ -362,7 +420,8 @@ def create_session(board: Board, variant, size_id: int | None,
     if board.protocol == PROTOCOL_QUANTUM:
         rejected = [name for name, value in (
             ("--size", size_id), ("--api-level", api_level),
-            ("--serial", serial)) if value is not None]
+            ("--serial", serial), ("--controller", controller),
+            ("--strict-pacing", strict_pacing or None)) if value is not None]
         if rejected:
             raise ValueError(
                 f"{', '.join(rejected)} only applies to Aurora-protocol "
