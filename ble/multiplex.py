@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable
@@ -26,7 +27,7 @@ from ble.advertising import (configure_hardware_adv_set,
                              set_adv_sets_enabled, static_random_address)
 from ble.gatt import GattProfile, GattUpdate, build_application, merge_profiles
 from ble.hci_monitor import AdvertisingConnection, Disconnection, HciMonitor
-from ble.peripheral import BLUEZ_SERVICE, GATT_MANAGER_IFACE
+from ble.peripheral import BLUEZ_SERVICE, GATT_MANAGER_IFACE, readvertise_delay
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,9 @@ class MultiplexedBLEPeripheral:
     def __init__(self, boards: list[VirtualBoard],
                  on_fatal: Callable[[BaseException], None] | None = None,
                  multi_connect: bool = False,
-                 adapter: str = DEFAULT_ADAPTER) -> None:
+                 adapter: str = DEFAULT_ADAPTER,
+                 readvertise_delay_s: float = 0.0,
+                 clock: Callable[[], float] = time.monotonic) -> None:
         if len(boards) != 2:
             raise ValueError("the multiplexed peripheral requires exactly two boards")
         if boards[0].address == boards[1].address:
@@ -86,6 +89,11 @@ class MultiplexedBLEPeripheral:
         self._connection_slots: dict[int, int] = {}
         self._pending: deque[_PendingConnection] = deque()
         self._enabled = [False, False]
+        # A board whose last central left stays silent until this time
+        # (--readvertise-delay; see ble.peripheral.readvertise_delay).
+        self._readvertise_delay_s = readvertise_delay_s
+        self._clock = clock
+        self._quiet_until = [0.0, 0.0]
         self._sync_needed = False
         self._app = None
         self._slot_read_values = [
@@ -340,13 +348,18 @@ class MultiplexedBLEPeripheral:
             self._connected[slot].difference_update(gone)
             for device in gone:
                 self._assignments.pop(device, None)
-            if not self._connected[slot] and self._boards[slot].on_disconnect:
-                self._boards[slot].on_disconnect()
+            if not self._connected[slot]:
+                self._quiet_until[slot] = self._clock() + readvertise_delay(
+                    0, self._multi_connect, self._readvertise_delay_s)
+                if self._boards[slot].on_disconnect:
+                    self._boards[slot].on_disconnect()
             self._sync_needed = True
 
     def _desired_enabled(self, slot: int) -> bool:
         if self._multi_connect:
             return True
+        if self._clock() < self._quiet_until[slot]:
+            return False
         pending = any(item.slot == slot for item in self._pending)
         return not self._connected[slot] and not pending
 
@@ -360,7 +373,9 @@ class MultiplexedBLEPeripheral:
                 raise RuntimeError(
                     f"controller rejected {action} for board {slot + 1}")
             self._enabled[slot] = desired
-        self._sync_needed = False
+        # Keep polling while a board sits out its re-advertise delay.
+        now = self._clock()
+        self._sync_needed = any(now < until for until in self._quiet_until)
 
     async def _serve(self) -> None:
         if os.geteuid() != 0:

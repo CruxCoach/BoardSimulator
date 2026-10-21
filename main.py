@@ -127,6 +127,13 @@ def _parse_args() -> argparse.Namespace:
              "pacing end to end.",
     )
     parser.add_argument(
+        "--readvertise-delay", type=float, default=0.0, metavar="SECONDS",
+        help="After the last central leaves, stay silent this long before "
+             "advertising again. Real Aurora boxes often take more than 4 s; "
+             "an app that grabs the first board it sees then picks a "
+             "neighbouring wall. Exclusive connections only (default: 0).",
+    )
+    parser.add_argument(
         "--instances", type=int, choices=(1, 2), default=1,
         help="Virtual boards on this adapter; two use simultaneous hardware "
              "advertising (default: %(default)s).",
@@ -221,7 +228,8 @@ def _next_serial(serial: str) -> str:
 
 
 def _run_headless(session, multi_connect: bool,
-                  adapter: str = DEFAULT_ADAPTER) -> int:
+                  adapter: str = DEFAULT_ADAPTER,
+                  readvertise_delay_s: float = 0.0) -> int:
     """Single board, no GUI: wait for BLE writes until Ctrl+C or a fatal
     peripheral error. Headless has no board bar — switch by restarting."""
     from ble.peripheral import BLEPeripheral
@@ -254,6 +262,7 @@ def _run_headless(session, multi_connect: bool,
         on_fatal=peripheral_failed,
         multi_connect=multi_connect,
         adapter=adapter,
+        readvertise_delay_s=readvertise_delay_s,
     )
     signal.signal(signal.SIGINT, lambda *_: shutdown())
     try:
@@ -269,7 +278,8 @@ def _run_headless(session, multi_connect: bool,
 
 
 def _run_headless_multi(sessions: list, multi_connect: bool,
-                        adapter: str = DEFAULT_ADAPTER) -> int:
+                        adapter: str = DEFAULT_ADAPTER,
+                        readvertise_delay_s: float = 0.0) -> int:
     """Two board sessions and renderers behind one physical controller."""
     from ble.multiplex import MultiplexedBLEPeripheral, VirtualBoard
 
@@ -302,7 +312,8 @@ def _run_headless_multi(sessions: list, multi_connect: bool,
     ]
     ble = MultiplexedBLEPeripheral(
         boards, on_fatal=peripheral_failed,
-        multi_connect=multi_connect, adapter=adapter)
+        multi_connect=multi_connect, adapter=adapter,
+        readvertise_delay_s=readvertise_delay_s)
     signal.signal(signal.SIGINT, lambda *_: shutdown())
     try:
         ble.start()
@@ -317,7 +328,8 @@ def _run_gui(selection, second_selection, api_level, serial, second_serial,
              multi_connect: bool, instance_count: int = 1,
              adapter: str = DEFAULT_ADAPTER, window_height: int | None = None,
              fullscreen: bool = False, controller: str | None = None,
-             strict_pacing: bool = False) -> int:
+             strict_pacing: bool = False,
+             readvertise_delay_s: float = 0.0) -> int:
     """GUI mode: ONE persistent Tk root; a board-bar pick tears down the
     current panel + BLE peripheral and rebuilds them for the new board.
 
@@ -459,7 +471,8 @@ def _run_gui(selection, second_selection, api_level, serial, second_serial,
                 on_connect=lambda p=panel: p.update_status("Verbunden"),
                 on_disconnect=lambda p=panel, s=session: (
                     s.connection_lost(), p.update_status("Advertising...")),
-                on_fatal=fatal, multi_connect=state["multi"], adapter=adapter)
+                on_fatal=fatal, multi_connect=state["multi"], adapter=adapter,
+                readvertise_delay_s=readvertise_delay_s)
         else:
             virtual_boards = [
                 VirtualBoard(
@@ -473,7 +486,8 @@ def _run_gui(selection, second_selection, api_level, serial, second_serial,
             ]
             ble = MultiplexedBLEPeripheral(
                 virtual_boards, on_fatal=fatal,
-                multi_connect=state["multi"], adapter=adapter)
+                multi_connect=state["multi"], adapter=adapter,
+                readvertise_delay_s=readvertise_delay_s)
         state["ble"] = ble
         ble.start()
 
@@ -509,6 +523,9 @@ def main() -> int:
     if second_layout is None and args.second_board is None:
         second_layout = args.layout
     second_sel = Selection(second_board_key, second_layout, args.second_size)
+    if args.readvertise_delay < 0:
+        logger.error("--readvertise-delay must not be negative")
+        return 2
     kilter_built = args.controller == config.CONTROLLER_KILTER_BUILT
     first_serial = args.serial or config.BOARD_SERIAL
     # A Kilter-built box has no serial; two of them advertise the same bare
@@ -572,12 +589,15 @@ def main() -> int:
         if headless:
             if args.instances == 2:
                 return _run_headless_multi(
-                    [session, second_session], multi, args.adapter)
-            return _run_headless(session, multi, args.adapter)
+                    [session, second_session], multi, args.adapter,
+                    args.readvertise_delay)
+            return _run_headless(session, multi, args.adapter,
+                                 args.readvertise_delay)
         return _run_gui(
             sel, second_sel, args.api_level, args.serial, second_serial,
             multi, args.instances, args.adapter, args.window_height,
-            args.fullscreen, args.controller, args.strict_pacing)
+            args.fullscreen, args.controller, args.strict_pacing,
+            args.readvertise_delay)
     finally:
         logger.info("Goodbye")
 

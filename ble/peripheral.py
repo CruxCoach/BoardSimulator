@@ -75,6 +75,20 @@ def should_advertise(link_count: int, multi_connect: bool) -> bool:
     return multi_connect or link_count == 0
 
 
+def readvertise_delay(link_count: int, multi_connect: bool,
+                      configured_s: float) -> float:
+    """Extra silence before advertising again after the last central left.
+
+    Real Aurora boxes often take more than 4 s to re-advertise after a link
+    ends (Boardsesh #3609). Apps that grab the first board they see then
+    connect to a neighbouring wall; ``--readvertise-delay`` reproduces that.
+    Multi-connect boards never stop advertising, so they never wait.
+    """
+    if multi_connect or link_count != 0:
+        return 0.0
+    return max(0.0, configured_s)
+
+
 async def _async_preflight(adapter: str = DEFAULT_ADAPTER) -> None:
     """Verify org.bluez is on the system bus and THIS adapter exists."""
     wanted = adapter_path(adapter)
@@ -144,7 +158,8 @@ class BLEPeripheral:
                  on_disconnect: Callable[[], None] | None = None,
                  on_fatal: Callable[[BaseException], None] | None = None,
                  multi_connect: bool = False,
-                 adapter: str = DEFAULT_ADAPTER) -> None:
+                 adapter: str = DEFAULT_ADAPTER,
+                 readvertise_delay_s: float = 0.0) -> None:
         # Validate here rather than in the thread: a typo'd adapter is a
         # startup error, not a mysterious dead peripheral 50 ms later.
         self._adapter = normalize_adapter(adapter)
@@ -182,6 +197,7 @@ class BLEPeripheral:
         # Aurora hardware is exclusive, so that is the default; multi is for
         # testing the app against a board that takes several clients.
         self._multi_connect = multi_connect
+        self._readvertise_delay_s = readvertise_delay_s
         # Set once _serve() knows them, so a runtime mode change can act.
         self._adv_context: tuple | None = None
 
@@ -483,7 +499,10 @@ class BLEPeripheral:
                 # hardware looks like from the outside.
                 if should_advertise(effective, self._multi_connect):
                     asyncio.ensure_future(self._restart_advertising(
-                        adapter_props, uuid, board_name, reason=source))
+                        adapter_props, uuid, board_name, reason=source,
+                        delay_s=readvertise_delay(
+                            effective, self._multi_connect,
+                            self._readvertise_delay_s)))
 
         def _on_properties_changed(msg: Message) -> None:
             if msg.message_type != MessageType.SIGNAL:
@@ -587,13 +606,16 @@ class BLEPeripheral:
             logger.debug("bus disconnect failed: %s", exc)
 
     async def _restart_advertising(self, adapter_props, uuid: str, name: str,
-                                   reason: str = "") -> None:
+                                   reason: str = "", delay_s: float = 0.0) -> None:
         """Put advertising back up on THIS adapter so (further) clients can
         connect — the other realm's advertising set is untouched."""
         async with self._adv_lock:
+            if delay_s:
+                logger.info("[%s] Silent for %.1f s before re-advertising "
+                            "(--readvertise-delay)", self._adapter, delay_s)
             logger.info("[%s] Restarting advertising (%s)...",
                         self._adapter, reason or "link change")
-            await asyncio.sleep(1.0)  # Give BlueZ time to clean up
+            await asyncio.sleep(1.0 + delay_s)  # BlueZ cleanup + emulated box
 
             # Re-enable Discoverable (BlueZ may have turned it off)
             try:

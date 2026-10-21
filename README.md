@@ -169,6 +169,12 @@ sudo venv/bin/python main.py --board kilter --size 28 --controller kilter-built
 # …and drop chunks closer than 100 ms, to prove an app's pacing
 sudo venv/bin/python main.py --controller kilter-built --strict-pacing
 
+# Two new Kilter walls in one gym (both "Kilter Board"); a released wall
+# re-advertises only after 5 s, like real boxes — does the app reconnect
+# to the wall it released, or grab the neighbour?
+sudo venv/bin/python main.py --controller kilter-built --instances 2 \
+    --readvertise-delay 5
+
 # List all boards/layouts/sizes (no BLE, no root needed)
 python main.py --list
 ```
@@ -182,6 +188,7 @@ python main.py --list
 | `--serial` | `0001` | Serial number, suffix `#serial` in the BLE name — Aurora boards only |
 | `--controller` | `aurora` | LED box generation: `aurora` (classic, `Name#serial@apiLevel`, writes with and without response) or `kilter-built` (bare name, API 2, write-with-response only, chunks closer than 100 ms are reported) — Aurora boards only |
 | `--strict-pacing` | off | With `--controller kilter-built`: drop chunks that arrive sooner than 100 ms after the previous one |
+| `--readvertise-delay` | `0` | Seconds a board stays silent after its last central left (real Aurora boxes often take > 4 s) — exclusive connections only |
 | `--instances` | `1` | Simulate one or two virtual boards on the selected adapter |
 | `--second-board` | same as board 1 | Initial board for slot 2 |
 | `--second-layout` | same/default | Initial layout for slot 2 |
