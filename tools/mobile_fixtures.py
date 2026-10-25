@@ -18,27 +18,37 @@ from boards import BOARDS
 from protocols.aurora_encoder import encode_climb_v2, encode_climb_v3, hex_to_color_byte
 from protocols.quantum import Command, WireVersion, encode, encode_chunks
 from protocols.session import create_session
+from protocols.shinywall import (ROLE_RGB, UNKNOWN_RGB, ShinyWallOptions,
+                                 encode_vector, route_writes, state_vector)
 
 
 def normalize(session, state: dict) -> list:
     if session.board.protocol == "quantum":
         return sorted([p, v.r, v.g, v.b] for p, v in state.items())
+    if session.board.protocol == "shinywall":
+        return sorted([i, *ROLE_RGB.get(c, UNKNOWN_RGB)] for i, c in state.items())
     if session.board.protocol == "moonboard":
         return sorted([row * 11 + col + 1, *v[1:]] for (col, row), v in state.items())
     return sorted([p, *v] for p, v in state.items())
 
 
-def trace(item: dict, writes: list[bytes | None], api: int = 3) -> dict:
+def trace(item: dict, writes: list[bytes | None], api: int = 3,
+          shiny: dict | None = None) -> dict:
     board = BOARDS[item["board"]]
+    options = None
+    if shiny is not None:
+        options = ShinyWallOptions(length_mode=shiny["length"],
+                                   codes_mode=shiny["codes"], ack=shiny["ack"])
     session = create_session(board, board.variant_for(item["layout"]), item["size"],
-                             api if item["family"] == "aurora" else None, None)
+                             api if item["family"] == "aurora" else None, None,
+                             shiny=options)
     states, replies, moon_details = [], [], []
     session.state.register_callback(lambda state: states.append(normalize(session, state)))
     for write in writes:
         if write is None:
             # Native mobile resets link transport for all families; Linux exposes
             # the session hook for Quantum only. Construct equivalent reset here.
-            if item["family"] == "quantum": session.connection_lost()
+            if item["family"] in ("quantum", "shinywall"): session.connection_lost()
             elif item["family"] == "moonboard": session._decoder.reset()
             else:
                 from protocols.aurora_decoder import ProtocolDecoder
@@ -47,17 +57,40 @@ def trace(item: dict, writes: list[bytes | None], api: int = 3) -> dict:
         old_count = len(states)
         for update in session.feed(write) or []:
             if isinstance(update, GattUpdate):
-                replies.append(dict(notify=list(update.notification) if update.notification is not None else None,
-                                    state=list(update.read_value)))
+                reply = dict(notify=list(update.notification) if update.notification is not None else None)
+                if update.read_value is not None:
+                    reply["state"] = list(update.read_value)
+                replies.append(reply)
             else:
                 replies.append(dict(notify=list(update)))
         if item["family"] == "moonboard" and len(states) > old_count:
             problem = session._decoder.decoded_problem
             moon_details.append([list(x) for x in problem.led_commands])
-    return dict(id=item["id"], family=item["family"], api=api,
-                rows=item.get("rows"), addresses=item.get("addresses", []),
-                writes=[list(w) if w is not None else None for w in writes],
-                states=states, replies=replies, moonLEDs=moon_details)
+    result = dict(id=item["id"], family=item["family"], api=api,
+                  rows=item.get("rows"), addresses=item.get("addresses", []),
+                  writes=[list(w) if w is not None else None for w in writes],
+                  states=states, replies=replies, moonLEDs=moon_details)
+    if item["family"] == "shinywall":
+        result.update(holdCount=item["holdCount"], shiny=shiny,
+                      events=[event.kind for event in session.events])
+    return result
+
+
+def shiny_writes(holds: int) -> list[bytes | None]:
+    """Every decoder path, as the official app and broken apps would send."""
+    route = {0: 2, 1: 2, holds // 4: 4, holds // 2: 4, holds // 8: 6, holds - 11: 8}
+    vector = encode_vector(state_vector(route, holds))
+    bad = bytearray(vector)
+    bad[3], bad[4], bad[5] = ord("x"), ord("5"), ord("9")
+    writes: list[bytes | None] = [b"\r\n "] + route_writes(route, holds, mtu=23)
+    writes += route_writes(route, holds, mtu=517)
+    writes += [vector[:40] + b"-" + vector[:60], vector[60:],      # '-' mid-vector
+               b"+2468.", encode_vector([2] * (holds + 3)),        # short / long
+               bytes(bad), b"f3.", b"*12/4.", b"Z9.\x00",
+               b"." + b"+".join(b"0" for _ in range(holds)) + b".",  # old format
+               b"+" + b"4" * 5000 + b"." + vector[:30], None,      # overflow, link loss
+               vector, b"-"]
+    return writes
 
 
 def build(catalog: list[dict]) -> list[dict]:
@@ -75,6 +108,8 @@ def build(catalog: list[dict]) -> list[dict]:
                 bad = bytearray(b"".join(encode_climb(holds[:3]))); bad[2] ^= 0x80
                 writes = frames + [bytes(bad)] + encode_climb(holds[:4]) + encode_climb([])
                 traces.append(trace(item, writes, api))
+        elif family == "shinywall":
+            continue  # see build_shiny
         elif family == "moonboard":
             n = 11 * item["rows"] - 1
             writes = [b"ignored", b"l#S0,P1,", f"E{n},F17,L18,M35,R36#".encode(),
@@ -113,10 +148,22 @@ def build(catalog: list[dict]) -> list[dict]:
     return traces
 
 
+def build_shiny(catalog: list[dict]) -> list[dict]:
+    traces = []
+    for item in catalog:
+        if item["family"] != "shinywall":
+            continue
+        writes = shiny_writes(item["holdCount"])
+        traces.append(trace(item, writes, shiny=dict(length="lenient", codes="reject", ack=True)))
+        if item["layout"] == "st1":
+            traces.append(trace(item, writes, shiny=dict(length="strict", codes="accept", ack=False)))
+    return traces
+
+
 if __name__ == "__main__":
     logging.disable(logging.CRITICAL)
     destination = ROOT / "mobile/shared/generated"
     catalog = json.loads((destination / "catalog.json").read_text())
-    traces = build(catalog)
+    traces = build(catalog) + build_shiny(catalog)
     (ROOT / "mobile/tests/generated-fixtures.json").write_text(json.dumps(traces, separators=(",", ":")) + "\n")
     print(f"Generated {len(traces)} Python reference traces for {len(catalog)} selectable configurations")

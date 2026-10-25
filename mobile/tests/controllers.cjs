@@ -1,7 +1,7 @@
 'use strict';
 const assert=require('node:assert/strict');
 require('../shared/protocols.js');require('../shared/quantum.js');
-const {BoardSession,controllerProfile,WriteGuard,receivingFlags}=require('../shared/session.js');
+const {BoardSession,controllerProfile,WriteGuard,receivingFlags,shinyProfile}=require('../shared/session.js');
 const fixtures=require('./generated-fixtures.json');
 const catalog=require('../shared/generated/catalog.json');
 const profile=catalog.find(p=>p.id==='kilter/original/10');
@@ -68,5 +68,27 @@ commands.accept(20,'command','A',0);commands.accept(20,'command','A',1);
 assert.equal(reports.length,1,'write without response to a write-only RX is reported once per central');
 reports=[];new WriteGuard(['write','write-without-response'],0,false,m=>reports.push(m)).accept(20,'command','A',0);
 assert.equal(reports.length,0);
+// Shiny Wall: exact name, optional advertised UUID, per-central partial vectors.
+const wall=catalog.find(p=>p.id==='shinywall/st1/-');
+assert.equal(shinyProfile(wall).name,'ShinyWall_STP_0001');
+const custom=shinyProfile(wall,{name:'ShinyWall_STP_ABC123',advertiseUuid:false,ack:true});
+assert.equal(custom.name,'ShinyWall_STP_ABC123');assert.equal(custom.advertised,'');
+assert.deepEqual(custom.shiny,{length:'lenient',codes:'reject',ack:true});
+assert.equal(wall.advertised,'4fafc201-1fb5-459e-8fcc-c5c9c331914b','catalog entry must not change');
+assert.throws(()=>shinyProfile(wall,{name:'x'.repeat(30)}),/at most 29/);
+assert.equal(shinyProfile(moon,{name:'x'}).name,moon.name,'only the Shiny Wall takes a name');
+const shinyReports=[];let lit=[];
+const shinyBoard=new BoardSession(custom,3,h=>lit=h,m=>shinyReports.push(m));
+const vector=Array.from(Buffer.from('+2'+'0'.repeat(309)+'8.'));
+shinyBoard.feed('A',vector.slice(0,100));
+assert.deepEqual(shinyBoard.feed('B',[45]),[{notify:[79,75]}],'B clears and is acknowledged');
+assert.deepEqual(shinyBoard.feed('A',vector.slice(100)),[{notify:[79,75]}]);
+assert.deepEqual(lit.map(h=>h[0]),[0,310],'A finishes its route despite B');
+shinyBoard.feed('A',vector.slice(0,10));shinyBoard.disconnect('A');
+assert.ok(shinyReports.some(r=>r.includes("ABORT link ended inside a state vector")));
+{const {ShinyWall}=require('../shared/protocols.js');let wall=[];
+  new ShinyWall(3,h=>wall=h,()=>{}).feed(Array.from(Buffer.from('+268.')));
+  assert.deepEqual(wall,[[0,34,221,68],[1,255,210,31],[2,255,59,59]]);}
+console.log('Shiny Wall: exact name, optional UUID, OK acknowledgements and per-central vectors passed');
 console.log('Interleaved controllers: independent frame buffers, disconnect isolation, Quantum shared roster/layers and independent boards passed');
 console.log('Kilter-built box: bare name, API 2, write-only RX and write-guard pacing passed');

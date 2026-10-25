@@ -13,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+import config
 from board_geometry import BoardGeometry, list_sizes
 from boards import BOARDS
 from protocols.session import create_session
@@ -53,6 +54,17 @@ def export(destination: Path) -> list[dict]:
                         if (Path(board.assets_dir) / filename).exists():
                             item["image"] = f"assets/{board.key}/{filename}"
                             break
+                elif board.protocol == "shinywall":
+                    geometry = session.geometry
+                    # Schematic view: positions from the geometry file, or the
+                    # hold-index placeholder; no vendor image.
+                    item.update(aspect=geometry.aspect_ratio,
+                                holdCount=session.hold_count,
+                                positions=geometry.source,
+                                notifyUuid=config.SHINYWALL_WRITE_UUID,
+                                cell=1 / geometry.span[0],
+                                points={str(h.index): list(geometry.to_unit(h))
+                                        for h in geometry.holds})
                 elif board.protocol == "moonboard":
                     layout = json.loads((Path(board.assets_dir) / (variant.asset_base + ".json")).read_text())
                     item.update(rows=variant.grid_rows, aspect=layout["imageAspect"],
@@ -67,6 +79,7 @@ def export(destination: Path) -> list[dict]:
                         points[str(diode.address32)] = points[str(diode.address16)]
                     item.update(aspect=1, points=points,
                                 addresses=[d.address16 for d in geometry.diodes],
+                                notifyUuid=config.QUANTUM_NOTIFY_UUID,
                                 image=f"assets/quantum/{variant.asset_file}")
                 result.append(item)
     (destination / "catalog.json").write_text(json.dumps(result, separators=(",", ":")) + "\n")

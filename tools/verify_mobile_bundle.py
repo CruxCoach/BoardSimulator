@@ -22,7 +22,10 @@ def verify(bundle: Path) -> None:
         if source.is_file():
             target = bundle / "generated" / source.relative_to(ROOT)
             assert hashlib.sha256(source.read_bytes()).digest() == hashlib.sha256(target.read_bytes()).digest(), str(target)
-    assert len({item["board"] for item in catalog}) == 8
+    sys.path.insert(0, str(ROOT))
+    from boards import BOARDS
+
+    assert {item["board"] for item in catalog} == set(BOARDS)
     print(f"Verified offline scripts, {len(catalog)} configurations and byte-identical original assets")
 
 

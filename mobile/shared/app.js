@@ -31,6 +31,8 @@ function cascade(level) {
   if(level!=='size') options('size',layouts.map(x=>[String(x.size),x.sizeName]),String(layouts[0].defaultSize));
   selected=layouts.find(x=>String(x.size)===$('size').value)||layouts[0];
   for(const id of ['apiLabel','serialLabel','controllerLabel','strictLabel'])$(id).hidden=selected.family!=='aurora';
+  for(const id of ['shinyNameLabel','shinyUuidLabel','shinyStrictLabel','shinyAckLabel'])$(id).hidden=selected.family!=='shinywall';
+  if(selected.family==='shinywall')$('shinyName').value=selected.name;
   $('size').disabled=selected.size===null;
   showController();
   holds=[]; picture=null; const current=++generation;
@@ -39,21 +41,29 @@ function cascade(level) {
     image.onerror=()=>log('Image unavailable: '+selected.image); image.src='generated/'+selected.image;
   }
   $('legend').textContent=selected.roles ? selected.roles.map(r=>r.name+' #'+r.id+' '+r.led_color).join(' · ') :
-    selected.family==='moonboard' ? 'Start green · Hand blue · Finish red · Foot cyan · Left violet · Match pink' : 'Quantum route/editor colors';
+    selected.family==='moonboard' ? 'Start green · Hand blue · Finish red · Foot cyan · Left violet · Match pink' :
+    selected.family==='shinywall' ? 'Start green · Hand blue · Foot yellow · Top red · '+selected.holdCount+' holds · positions: '+selected.positions :
+    'Quantum route/editor colors';
   draw();
 }
 for(const id of ['board','layout','size']) $(id).onchange=()=>{const restart=active;cascade(id);if(restart)start();};
 $('api').onchange=()=>{if(active)start();};
 $('serial').onchange=()=>{if(active)start();};
+for(const id of ['shinyName','shinyUuid','shinyStrict','shinyAck'])$(id).onchange=()=>{showController();if(active)start();};
 function controller() { return selected.family==='aurora'?$('controller').value:'aurora'; }
-function currentProfile() { return controllerProfile(selected,controller(),$('serial').value,Number($('api').value)); }
+function currentProfile() {
+  if(selected.family==='shinywall') return shinyProfile(selected,{name:$('shinyName').value.trim()||undefined,
+    advertiseUuid:$('shinyUuid').checked,strict:$('shinyStrict').checked,ack:$('shinyAck').checked});
+  return controllerProfile(selected,controller(),$('serial').value,Number($('api').value));
+}
 function showController() {
   // A Kilter-built box has no serial and speaks API 2 only.
   const built=controller()==='kilter-built';
   if(built)$('api').value='2';
   $('api').disabled=built;$('serial').disabled=built;$('strict').disabled=!built;
   if(!built)$('strict').checked=false;
-  const profile=currentProfile();$('identity').textContent=profile.name+' · '+profile.advertised;
+  try {const profile=currentProfile();$('identity').textContent=profile.name+' · '+(profile.advertised||'no service UUID advertised');}
+  catch(error) {$('identity').textContent=error.message;}
 }
 $('controller').onchange=()=>{showController();if(active)start();};
 $('strict').onchange=()=>{if(active)start();};
@@ -65,10 +75,14 @@ function draw() {
   if(picture) ctx.drawImage(picture,ox,oy,w,h);
   else {ctx.fillStyle='#34434d';for(const p of Object.values(selected.points)){ctx.beginPath();ctx.arc(ox+p[0]*w,oy+p[1]*h,2,0,Math.PI*2);ctx.fill();}}
   let unknown=0;
+  const shiny=selected.family==='shinywall';
   for(const [id,r,g,b] of holds) {
     const p=selected.points[id];if(!p){unknown++;continue;}
-    ctx.strokeStyle='rgb('+[r,g,b].join(',')+')';ctx.lineWidth=Math.max(2,w/170);
-    ctx.beginPath();ctx.arc(ox+p[0]*w,oy+p[1]*h,Math.max(4,w/65),0,Math.PI*2);ctx.stroke();
+    const color='rgb('+[r,g,b].join(',')+')',radius=Math.max(4,shiny&&selected.cell?w*selected.cell*0.42:w/65);
+    ctx.strokeStyle=color;ctx.lineWidth=Math.max(2,w/170);
+    ctx.beginPath();ctx.arc(ox+p[0]*w,oy+p[1]*h,radius,0,Math.PI*2);ctx.stroke();
+    // Shiny positions may be a placeholder: the index tells the tester which hold lit.
+    if(shiny){ctx.fillStyle=color;ctx.font=Math.max(8,radius)+'px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(String(id),ox+p[0]*w,oy+p[1]*h);}
   }
   $('count').textContent=holds.length+' lit holds'+(unknown?' · '+unknown+' addresses outside this geometry':'');
 }
@@ -80,13 +94,16 @@ function setActive(value) {
 $('connections').onchange=()=>native('connections',{multi:$('connections').value==='multi'});
 function start() {
   if(selected.family==='aurora'&&controller()==='aurora'&&!$('serial').reportValidity())return;
+  let profile;
+  try {profile=currentProfile();} catch(error) {$('status').textContent=error.message;log(error.message);return;}
   received=0; stateValue=[1,71,0,0]; holds=[];
   const emit=value=>{holds=Array.from(new Map(value.map(h=>[h[0],h])).values());draw();};
-  const profile=currentProfile(); profile.runToken=runToken=++nextRunToken;
-  session=new BoardSession(selected,profile.api||Number($('api').value),emit,log);
+  profile.runToken=runToken=++nextRunToken;
+  session=new BoardSession(profile.shiny?Object.assign({},selected,{shiny:profile.shiny}):selected,
+    profile.api||Number($('api').value),emit,log);
   guard=new WriteGuard(receivingFlags(profile),profile.minWriteGapMs||0,$('strict').checked,log);
   delete profile.points;delete profile.roles;delete profile.addresses;
-  $('identity').textContent=profile.name+' · '+profile.advertised;
+  $('identity').textContent=profile.name+' · '+(profile.advertised||'no service UUID advertised');
   setActive(true); native('start',{profile,multi:$('connections').value==='multi'});
 }
 $('start').onclick=start;
@@ -102,7 +119,9 @@ const api={
   receive(bytes,peer="default",token=runToken,writeType=null,atMs=null) {
     if(!session||!active||token!==runToken)return [];
     if(guard&&!guard.accept(bytes.length,writeType,peer,atMs??performance.now()))return [];
-    received+=bytes.length;log('RX '+bytes.length+' B ('+received+' total): '+bytes.map(b=>b.toString(16).padStart(2,'0')).join(''));
+    received+=bytes.length;
+    const text=selected.family==='shinywall'&&bytes.every(b=>b>=32&&b<127)?" '"+String.fromCharCode(...bytes)+"'":'';
+    log('RX '+bytes.length+' B ('+received+' total'+(writeType?', '+writeType:'')+') from '+peer+': '+bytes.map(b=>b.toString(16).padStart(2,'0')).join('')+text);
     const updates=session.feed(peer,bytes);
     for(const update of updates) if(update.state) stateValue=update.state;
     return updates;

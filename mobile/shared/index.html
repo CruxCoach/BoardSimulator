@@ -12,6 +12,10 @@
 <label id="serialLabel">Aurora serial<input id="serial" value="0001" pattern="[A-Za-z0-9]{1,8}" maxlength="8" required></label>
 <label id="controllerLabel">LED box<select id="controller" title="Classic Aurora box: Name#serial@API, writes with and without response. Kilter-built box (since mid-2025): bare name, API 2, write-with-response only, 100 ms pacing expected."><option value="aurora">Classic Aurora</option><option value="kilter-built">Kilter-built</option></select></label>
 <label id="strictLabel" title="Drop chunks that arrive less than 100 ms after the previous one, like a box that cannot keep up"><input type="checkbox" id="strict"> Strict 100 ms pacing</label>
+<label id="shinyNameLabel" hidden title="Exact advertised name, at most 29 bytes. The official Shiny Wall app connects to the first device whose name contains the wall's stored name (ShinyWall_ when none is stored).">Advertised name<input id="shinyName" maxlength="29" spellcheck="false" autocapitalize="off"></label>
+<label id="shinyUuidLabel" hidden title="Off: advertise flags and name only, no service UUID"><input type="checkbox" id="shinyUuid" checked> Advertise service UUID</label>
+<label id="shinyStrictLabel" hidden title="Reject a state vector whose length differs from the wall's hold count (default: apply what fits and report it)"><input type="checkbox" id="shinyStrict"> Strict vector length</label>
+<label id="shinyAckLabel" hidden title="Notify OK after every understood message on the write characteristic; the official app waits for it in traverses"><input type="checkbox" id="shinyAck"> Reply OK</label>
 <label>Connections<select id="connections"><option value="single">Exclusive</option><option value="multi">Multi-connect</option></select></label>
 <button id="start">Start BLE</button><button id="stop">Stop</button><button id="resume" hidden>Resume advertising after disconnect</button></section>
 <p id="identity"></p><p id="capability">Independent state per board; controller fragment buffers are isolated. Duplicate/overlapping GATT profiles are rejected.</p>

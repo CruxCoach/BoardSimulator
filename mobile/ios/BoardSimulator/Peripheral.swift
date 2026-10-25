@@ -21,7 +21,9 @@ final class Peripheral: NSObject, CBPeripheralManagerDelegate {
     private var publishing: CBMutableService?
     private var epoch = 0
     private let stateUUID = CBUUID(string: "FFF4")
-    private let notifyUUID = CBUUID(string: "FFF1")
+    private let quantumNotifyUUID = CBUUID(string: "FFF1")
+    // Replies are notified here: Quantum fff1, Shiny Wall its write characteristic.
+    private var notifyUUID = CBUUID(string: "FFF1")
 
     init(controller: BoardController, slot: Int) {
         self.controller = controller; self.slot = slot
@@ -84,6 +86,7 @@ final class Peripheral: NSObject, CBPeripheralManagerDelegate {
         }
         guard let selected = pending else { return }
         pending = nil; profile = selected
+        notifyUUID = CBUUID(string: selected["notifyUuid"] as? String ?? "FFF1")
         guard let specs = selected["services"] as? [[String: Any]] else { fail("Invalid GATT profile"); return }
         for spec in specs {
             guard let uuid = spec["uuid"] as? String else { fail("Missing service UUID"); return }
@@ -112,8 +115,10 @@ final class Peripheral: NSObject, CBPeripheralManagerDelegate {
         guard let profile = profile, let name = profile["name"] as? String,
               let advertised = profile["advertised"] as? String else { fail("Invalid identity"); return }
         if multi || owner == nil {
-            manager.startAdvertising([CBAdvertisementDataLocalNameKey: name,
-                                      CBAdvertisementDataServiceUUIDsKey: [CBUUID(string: advertised)]])
+            // An empty advertised UUID means name only (Shiny Wall option).
+            var data: [String: Any] = [CBAdvertisementDataLocalNameKey: name]
+            if !advertised.isEmpty { data[CBAdvertisementDataServiceUUIDsKey] = [CBUUID(string: advertised)] }
+            manager.startAdvertising(data)
         }
     }
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
@@ -152,7 +157,9 @@ final class Peripheral: NSObject, CBPeripheralManagerDelegate {
                     if let value = update["state"] as? [UInt8] { self.values[self.stateUUID] = Data(value) }
                     if let value = update["notify"] as? [UInt8], !self.subscribers.isEmpty {
                         guard self.notifications.count < 128 else { self.fail("Notification queue overflow"); return }
-                        self.notifications.append(Notification(value: Data(value), recipient: value.count > 1 && value[1] & 0x80 != 0 ? request.central.identifier : nil))
+                        // Quantum exceptions answer only the writer; other replies go to every subscriber.
+                        let exception = self.notifyUUID == self.quantumNotifyUUID && value.count > 1 && value[1] & 0x80 != 0
+                        self.notifications.append(Notification(value: Data(value), recipient: exception ? request.central.identifier : nil))
                     }
                 }
                 self.flush()
@@ -183,7 +190,7 @@ final class Peripheral: NSObject, CBPeripheralManagerDelegate {
         if !multi, let owner = owner, owner != central.identifier, !writers.contains(central.identifier) { return }
         subscribers[central.identifier] = central
         observe(central)
-        status("Quantum notifications subscribed · maximum \(central.maximumUpdateValueLength) bytes", running: true)
+        status("Notifications subscribed on \(characteristic.uuid.uuidString) · maximum \(central.maximumUpdateValueLength) bytes", running: true)
     }
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
         subscribers.removeValue(forKey: central.identifier)
@@ -201,7 +208,7 @@ final class Peripheral: NSObject, CBPeripheralManagerDelegate {
             guard !targets.isEmpty else { notifications.removeFirst(); continue }
             if targets.contains(where: { value.count > $0.maximumUpdateValueLength }) {
                 notifications.removeFirst()
-                status("Quantum broadcast exceeds negotiated notification size (\(value.count) bytes); fff4 remains readable", running: true)
+                status("Notification exceeds negotiated size (\(value.count) bytes); Quantum fff4 remains readable", running: true)
                 continue
             }
             guard manager.updateValue(value, for: c, onSubscribedCentrals: targets) else { return }

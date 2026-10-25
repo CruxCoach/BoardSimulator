@@ -2,7 +2,7 @@
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
-const {Aurora,Moon}=require('../shared/protocols.js');
+const {Aurora,Moon,ShinyWall}=require('../shared/protocols.js');
 const {Quantum,crc}=require('../shared/quantum.js');
 const fixtures=require('./generated-fixtures.json');
 const catalog=require('../shared/generated/catalog.json');
@@ -17,7 +17,8 @@ for(const trace of fixtures) {
       if(trace.family==='moonboard')moonLEDs.push(decoder.leds);
     };
     decoder=trace.family==='aurora'?new Aurora(trace.api,emit):
-      trace.family==='moonboard'?new Moon(trace.rows,emit):new Quantum(trace.addresses,emit);
+      trace.family==='moonboard'?new Moon(trace.rows,emit):
+      trace.family==='shinywall'?new ShinyWall(trace.holdCount,emit,()=>{},trace.shiny):new Quantum(trace.addresses,emit);
     for(const write of trace.writes) {
       if(write===null){decoder.reset();continue;}
       for(let i=0;i<write.length;i+=chunkSize) replies.push(...decoder.feed(write.slice(i,i+chunkSize)));
@@ -26,6 +27,7 @@ for(const trace of fixtures) {
     assert.deepEqual(states,trace.states,label+' state');
     assert.deepEqual(replies,trace.replies,label+' GATT replies');
     if(trace.family==='moonboard')assert.deepEqual(moonLEDs,trace.moonLEDs,label+' aux LED semantics');
+    if(trace.family==='shinywall')assert.deepEqual(decoder.events,trace.events,label+' '+JSON.stringify(trace.shiny)+' events');
     checks++;
   }
 }
@@ -52,4 +54,14 @@ assert.deepEqual(a,[[1,255,0,0]]);assert.deepEqual(b,[]);
 q1.reset();assert.deepEqual(a,[[1,255,0,0]]);
 const diagnostics=[];new Moon(18,()=>{},x=>diagnostics.push(x)).feed(new Array(5000).fill(108));
 assert.ok(diagnostics.includes('Moon frame overflow'));
+// Shiny Wall: one catalog entry per variant, no vendor image, schematic points.
+const shiny=catalog.filter(item=>item.family==='shinywall');
+assert.deepEqual(shiny.map(item=>[item.layout,item.holdCount,item.name]),[
+  ['st1',311,'ShinyWall_STP_0001'],['st4',401,'ShinyWall_STF_0001'],['st2',475,'ShinyWall_STM_0001'],
+  ['st5',611,'ShinyWall_STMF_0001'],['st0',239,'Shiny Wall ST0 (ShinyMini)']]);
+for(const item of shiny) {
+  assert.equal(item.image,undefined,item.id);
+  assert.equal(item.notifyUuid,'beb5483e-36e1-4688-b7f5-ea07361b26a8');
+  assert.equal(Object.keys(item.points).length,item.holdCount,item.id);
+}
 console.log(`${checks} fragmented conformance replays passed; ${catalog.length} configurations, palettes, assets, isolation and buffer limits checked`);

@@ -1,4 +1,4 @@
-/* Streaming Aurora and MoonBoard decoders. Wire behavior follows Python;
+/* Streaming Aurora, MoonBoard and Shiny Wall decoders. Wire behavior follows Python;
  * output is [address,r,g,b] for both renderers. No native/UI dependencies. */
 (function (root) {
   'use strict';
@@ -71,6 +71,106 @@
       this.details=details; this.leds=leds; this.emit(holds);
     }
   }
-  root.BoardProtocols={Aurora,Moon};
+  /* Shiny Wall: '-' clears; '<command><payload>.' otherwise, '+' + one digit
+   * per hold + '.' sets the wall. Mirrors protocols/shinywall.py byte by
+   * byte (same event kinds, same states however the stream is split). */
+  const SHINY_RGB={2:[34,221,68],4:[58,140,255],6:[255,210,31],8:[255,59,59]};
+  const SHINY_UNKNOWN_RGB=[255,255,255];
+  const SHINY_KNOWN=new Set([0,2,4,6,8]);
+  const SHINY_UNDERSTOOD=new Set(['clear','state','single','foot']);
+  const DASH=45,PLUS=43,STAR=42,FOOT=102,DOT=46;
+  function ascii(bytes) {
+    return Array.from(bytes.slice(0,48),b=>b>=32&&b<127?String.fromCharCode(b):'\\x'+b.toString(16).padStart(2,'0')).join('')+
+      (bytes.length>48?'… ('+bytes.length+' B)':'');
+  }
+  class ShinyWall {
+    constructor(holdCount,emit,diagnostic=()=>{},options={}) {
+      this.holdCount=holdCount;this.emit=emit;this.diagnostic=diagnostic;
+      this.strict=options.length==='strict';this.accept=options.codes==='accept';this.ack=!!options.ack;
+      this.limit=Math.max(4096,4*holdCount);this.events=[];this.state={};
+      this.command=null;this.discarding=false;this.payload=[];this.garbage=[];this.garbageTotal=0;
+    }
+    report(kind,detail) {
+      this.events.push(kind);this.diagnostic(kind.toUpperCase()+' '+detail);
+      if(this.ack&&SHINY_UNDERSTOOD.has(kind))this.updates.push({notify:[79,75]});
+    }
+    publish(state) {
+      this.state=state;
+      this.emit(Object.keys(state).map(Number).sort((a,b)=>a-b).map(i=>[i,...(SHINY_RGB[state[i]]||SHINY_UNKNOWN_RGB)]));
+    }
+    endGarbage() {
+      if(!this.garbageTotal)return;
+      this.report('garbage',this.garbageTotal+' B outside a message: '+ascii(this.garbage));
+      this.garbage=[];this.garbageTotal=0;
+    }
+    what() { return this.command===PLUS?'a state vector':this.command===STAR?"a '*' command":this.command===FOOT?"an 'f' command":
+      "a '"+String.fromCharCode(this.command)+"' message"; }
+    partial() { return (this.payload.length+1)+' B '+ascii([this.command,...this.payload]); }
+    clear() { this.report('clear',"'-': all holds off");this.publish({}); }
+    feed(bytes) {
+      this.updates=[];
+      for(const b of bytes)this.byte(b);
+      return this.updates;
+    }
+    flush() { this.updates=[];this.endGarbage();return this.updates; }
+    reset() {
+      this.updates=[];this.endGarbage();
+      if(this.command!==null)this.report('abort','link ended inside '+this.what()+'; discarded '+this.partial());
+      this.command=null;this.discarding=false;this.payload=[];
+      return this.updates;
+    }
+    byte(b) {
+      if(b===DASH) {
+        this.endGarbage();
+        if(this.command!==null&&!this.discarding)this.report('abort',"'-' inside "+this.what()+'; discarded '+this.partial());
+        this.command=null;this.discarding=false;this.payload=[];this.clear();return;
+      }
+      if(this.command===null) {
+        if(b>=0x21&&b<=0x7e&&b!==DOT) {this.endGarbage();this.command=b;this.payload=[];}
+        else {this.garbageTotal++;if(this.garbage.length<48)this.garbage.push(b);}
+        return;
+      }
+      if(b===DOT) {
+        const command=this.command,payload=this.payload,discarding=this.discarding;
+        this.command=null;this.discarding=false;this.payload=[];
+        if(!discarding)this.dispatch(command,payload);
+        return;
+      }
+      if(this.discarding)return;
+      this.payload.push(b);
+      if(this.payload.length>this.limit) {
+        this.report('overflow',this.what()+' longer than '+this.limit+" B without a closing '.'; discarded up to its end");
+        this.discarding=true;this.payload=[];
+      }
+    }
+    dispatch(command,payload) {
+      if(command===PLUS)this.vector(payload);
+      else if(command===STAR)this.report('single','single-hold command *'+ascii(payload)+'. (format not confirmed; logged, not applied)');
+      else if(command===FOOT)this.report('foot','init foot LEDs f'+ascii(payload)+'. (meaning unknown; logged, not applied)');
+      else if(command>=48&&command<=57&&payload.includes(PLUS))this.report('legacy',"old dotted format; the controller expects '+', one digit per hold, '.'; ignored");
+      else this.report('command',"unknown command '"+String.fromCharCode(command)+"' with payload '"+ascii(payload)+"'; ignored");
+    }
+    vector(payload) {
+      const codes=[],invalid=[],unknown=[];
+      payload.forEach((b,i)=>{
+        if(b<48||b>57){invalid.push(i);codes.push(0);return;}
+        let value=b-48;
+        if(!SHINY_KNOWN.has(value)){unknown.push(i);if(!this.accept)value=0;}
+        codes.push(value);
+      });
+      if(invalid.length)this.report('invalid',invalid.length+' invalid code(s), hold(s) left off: '+invalid.slice(0,12).join(', '));
+      if(unknown.length)this.report('unknown-code',unknown.length+' unknown code(s), '+(this.accept?'kept as unknown role':'hold(s) left off')+': '+unknown.slice(0,12).join(', '));
+      if(codes.length!==this.holdCount) {
+        this.report('length','vector has '+codes.length+' codes, this wall has '+this.holdCount+' holds');
+        if(this.strict){this.report('reject','strict length: vector rejected, wall unchanged');return;}
+      }
+      const state={};
+      codes.slice(0,this.holdCount).forEach((c,i)=>{if(c)state[i]=c;});
+      const count=role=>Object.values(state).filter(c=>c===role).length;
+      this.report('state',Math.min(codes.length,this.holdCount)+' codes applied — start '+count(2)+', hand '+count(4)+', foot '+count(6)+', top '+count(8)+'; '+(this.holdCount-Object.keys(state).length)+' off');
+      this.publish(state);
+    }
+  }
+  root.BoardProtocols={Aurora,Moon,ShinyWall,SHINY_RGB};
   if(typeof module!=='undefined') module.exports=root.BoardProtocols;
 })(globalThis);

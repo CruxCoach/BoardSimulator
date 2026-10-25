@@ -62,8 +62,37 @@ const fixtures=require('./generated-fixtures.json');
   },{message,clear,token:builtStart.profile.runToken});
   assert.notEqual(await kilter.locator('[id=count]').textContent(),'0 lit holds','the clear 10 ms later must be dropped');
   assert.match(await kilter.locator('[id=log]').textContent(),/dropped a 6-byte write 10 ms/);
+  // Shiny Wall: exact name, no advertised UUID, OK replies, ASCII receive log.
+  const wall=panels.nth(1);
+  await wall.locator('[id=board]').selectOption('shinywall');
+  assert.equal(await wall.locator('[id=shinyNameLabel]').isVisible(),true);
+  assert.equal(await wall.locator('[id=apiLabel]').isVisible(),false);
+  assert.equal(await wall.locator('[id=shinyName]').inputValue(),'ShinyWall_STP_0001');
+  await wall.locator('[id=shinyName]').fill('ShinyWall_STP_ABC123');
+  await wall.locator('[id=shinyName]').dispatchEvent('change');
+  await wall.locator('[id=shinyUuid]').uncheck();
+  await wall.locator('[id=shinyAck]').check();  // a running panel restarts on every change
+  const shinyStart=await page.evaluate(()=>messages.filter(m=>m.command==='start'&&m.slot===1).at(-1));
+  assert.equal(shinyStart.profile.name,'ShinyWall_STP_ABC123');
+  assert.equal(shinyStart.profile.advertised,'');
+  assert.equal(shinyStart.profile.notifyUuid,'beb5483e-36e1-4688-b7f5-ea07361b26a8');
+  assert.deepEqual(shinyStart.profile.shiny,{length:'lenient',codes:'reject',ack:true});
+  assert.match(await wall.locator('[id=identity]').textContent(),/no service UUID advertised/);
+  const replies=await page.evaluate(token=>{
+    BLE.status('Browser test: mock transport',true,1);
+    const vector=Array.from('+2'+'0'.repeat(150)+'4'+'0'.repeat(158)+'8.',c=>c.charCodeAt(0));
+    const out=[BLE.receive([45],'shiny-central',token,1,'request',0)];
+    for(let i=0;i<vector.length;i+=507)out.push(BLE.receive(vector.slice(i,i+507),'shiny-central',token,1,'request',100));
+    return out;
+  },shinyStart.profile.runToken);
+  assert.deepEqual(replies,[[{notify:[79,75]}],[{notify:[79,75]}]]);
+  assert.equal(await wall.locator('[id=count]').textContent(),'3 lit holds');
+  assert.match(await wall.locator('[id=log]').textContent(),/RX 313 B \(314 total, request\) from shiny-central: 2b32.* '\+20+/);
+  await wall.locator('[id=shinyName]').fill('ü'.repeat(15));  // 15 characters, 30 bytes
+  await wall.locator('[id=shinyName]').dispatchEvent('change');
+  assert.match(await wall.locator('[id=identity]').textContent(),/at most 29/);
   if(process.env.UI_SCREENSHOT)await page.screenshot({path:process.env.UI_SCREENSHOT,fullPage:true});
   assert.deepEqual(errors,[]);
-  console.log('Two-panel UI: routed reception, isolated rendering, runtime switch generation guard, independent modes and the Kilter-built box passed (mock transport only)');
+  console.log('Two-panel UI: routed reception, isolated rendering, runtime switch generation guard, independent modes, the Kilter-built box and the Shiny Wall passed (mock transport only)');
   await browser.close();
 })().catch(e=>{console.error(e);process.exit(1);});

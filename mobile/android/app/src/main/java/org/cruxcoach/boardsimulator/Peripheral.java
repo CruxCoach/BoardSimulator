@@ -30,8 +30,8 @@ final class Peripheral {
         Link(BluetoothDevice device) { this.device=device; }
     }
     private static final class Notification {
-        final Link link; final byte[] value;
-        Notification(Link link, byte[] value) {this.link=link;this.value=value;}
+        final Link link; final byte[] value; final String uuid;
+        Notification(Link link, byte[] value, String uuid) {this.link=link;this.value=value;this.uuid=uuid;}
     }
     private final Map<BluetoothDevice,Link> links=new LinkedHashMap<>();
     private boolean multi, servicesReady;
@@ -44,6 +44,8 @@ final class Peripheral {
     private boolean notifying;
     private Notification inFlight;
     private UUID advertisedUUID;
+    /** Characteristic replies are notified on: Quantum fff1, Shiny Wall its write characteristic. */
+    private String notifyUuid=NOTIFY;
     private final BroadcastReceiver changes = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             if (BluetoothAdapter.ACTION_STATE_CHANGED.equals(intent.getAction()) &&
@@ -84,7 +86,11 @@ final class Peripheral {
             if(adapter == null || !adapter.isEnabled()) throw new IllegalStateException("Bluetooth unavailable/off. Enable Bluetooth in Settings.");
             advertiser = adapter.getBluetoothLeAdvertiser();
             if(advertiser == null || !adapter.isMultipleAdvertisementSupported()) throw new IllegalStateException("This phone has no connectable BLE advertiser support.");
-            desiredName = profile.getString("name"); advertisedUUID = UUID.fromString(profile.getString("advertised"));
+            desiredName = profile.getString("name");
+            // An empty advertised UUID means flags + name only (Shiny Wall option).
+            String advertised = profile.optString("advertised", "");
+            advertisedUUID = advertised.isEmpty() ? null : UUID.fromString(advertised);
+            notifyUuid = profile.optString("notifyUuid", NOTIFY);
             IntentFilter filter = new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED);
             filter.addAction(BluetoothAdapter.ACTION_LOCAL_NAME_CHANGED);
             activity.registerReceiver(changes, filter); registered = true;
@@ -174,8 +180,12 @@ final class Peripheral {
         // Create each set once while its adapter name is selected. Exclusive
         // pause/resume toggles the existing set, preserving that name snapshot
         // when another board later changes the adapter's global local name.
+        AdvertiseData.Builder advertisement=new AdvertiseData.Builder();
+        if(advertisedUUID!=null) advertisement.addServiceUuid(new ParcelUuid(advertisedUUID));
+        // Without a UUID the name also fits the advertisement itself (flags 3 + name 2+26 bytes).
+        else if(desiredName.getBytes(java.nio.charset.StandardCharsets.UTF_8).length<=26) advertisement.setIncludeDeviceName(true);
         advertiser.startAdvertisingSet(new AdvertisingSetParameters.Builder().setLegacyMode(true).setConnectable(true).setScannable(true).setInterval(AdvertisingSetParameters.INTERVAL_LOW).build(),
-            new AdvertiseData.Builder().addServiceUuid(new ParcelUuid(advertisedUUID)).build(),
+            advertisement.build(),
             new AdvertiseData.Builder().setIncludeDeviceName(true).build(),null,null,advertising,
             new android.os.Handler(android.os.Looper.getMainLooper()));
     }
@@ -207,13 +217,17 @@ final class Peripheral {
                     }
                 });
             }
-            @Override public void onMtuChanged(BluetoothDevice d,int value) {post(() -> {if(links.containsKey(d))links.get(d).mtu=value;});}
+            @Override public void onMtuChanged(BluetoothDevice d,int value) {
+                android.util.Log.i("BoardSimWire", "slot="+slot+" peer="+d.getAddress()+" mtu="+value);
+                post(() -> {if(links.containsKey(d))links.get(d).mtu=value;status("MTU "+value+" · "+d.getAddress(),true);});
+            }
             @Override public void onCharacteristicWriteRequest(BluetoothDevice d,int request,BluetoothGattCharacteristic c,boolean prepared,boolean response,int offset,byte[] value) {
                 byte[] copy=value.clone();
                 // Arrival time for the pacing check, taken before the main-thread hop.
                 long at=android.os.SystemClock.elapsedRealtime();
                 android.util.Log.i("BoardSimWire", "slot="+slot+" peer="+d.getAddress()+" char="+c.getUuid()
-                    +" response="+response+" at="+at+" len="+copy.length+" hex="+hex(copy));
+                    +" response="+response+" prepared="+prepared+" offset="+offset
+                    +" at="+at+" len="+copy.length+" hex="+hex(copy));
                 post(() -> {
                     int result=prepared?BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED:offset!=0?BluetoothGatt.GATT_INVALID_OFFSET:
                         !assign(d)?BluetoothGatt.GATT_FAILURE:BluetoothGatt.GATT_SUCCESS;
@@ -227,10 +241,11 @@ final class Peripheral {
                                 if(u.has("state")) characteristic(STATE).setValue(bytes(u.getJSONArray("state")));
                                 if(u.has("notify")&&!u.isNull("notify")) {
                                     byte[] notification=bytes(u.getJSONArray("notify"));
-                                    boolean exception=notification.length>1 && (notification[1]&128)!=0;
-                                    for(Link target:links.values())if(target.subscribed.contains(UUID.fromString(NOTIFY)) && (!exception || target==link)) {
+                                    // Quantum exceptions answer only the writer; other replies go to every subscriber.
+                                    boolean exception=NOTIFY.equals(notifyUuid) && notification.length>1 && (notification[1]&128)!=0;
+                                    for(Link target:links.values())if(target.subscribed.contains(UUID.fromString(notifyUuid)) && (!exception || target==link)) {
                                         if(notifications.size()>=128) {fail("Notification queue overflow");return;}
-                                        notifications.add(new Notification(target,notification));
+                                        notifications.add(new Notification(target,notification,notifyUuid));
                                     }
                                 }
                             }
@@ -240,6 +255,7 @@ final class Peripheral {
                 });
             }
             @Override public void onCharacteristicReadRequest(BluetoothDevice d,int request,int offset,BluetoothGattCharacteristic c) {
+                android.util.Log.i("BoardSimWire", "slot="+slot+" peer="+d.getAddress()+" read char="+c.getUuid()+" offset="+offset);
                 post(() -> {
                     if(!assign(d)){server.sendResponse(d,request,BluetoothGatt.GATT_FAILURE,offset,null);return;}
                     if(c.getUuid().toString().equals(STATE)) activity.readState(slot,value -> {
@@ -252,7 +268,10 @@ final class Peripheral {
                 post(() -> readResponse(d,request,offset,links.containsKey(d)&&links.get(d).subscribed.contains(desc.getCharacteristic().getUuid())?BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE:BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE));
             }
             @Override public void onDescriptorWriteRequest(BluetoothDevice d,int request,BluetoothGattDescriptor desc,boolean prepared,boolean response,int offset,byte[] value) {
-                byte[] copy=value.clone();post(() -> {
+                byte[] copy=value.clone();
+                android.util.Log.i("BoardSimWire", "slot="+slot+" peer="+d.getAddress()+" descriptor="+desc.getUuid()
+                    +" char="+desc.getCharacteristic().getUuid()+" value="+hex(copy));
+                post(() -> {
                     int result=BluetoothGatt.GATT_SUCCESS;
                     if(prepared)result=BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED;
                     else if(offset!=0)result=BluetoothGatt.GATT_INVALID_OFFSET;
@@ -261,9 +280,14 @@ final class Peripheral {
                     else if(copy[0]==1)links.get(d).subscribed.add(desc.getCharacteristic().getUuid());
                     else links.get(d).subscribed.remove(desc.getCharacteristic().getUuid());
                     if(response)server.sendResponse(d,request,result,offset,null);
+                    status((result!=BluetoothGatt.GATT_SUCCESS?"Rejected descriptor write "+hex(copy):copy[0]==1?"Subscribed":"Unsubscribed")
+                        +" · "+desc.getCharacteristic().getUuid()+" · "+d.getAddress(),true);
                 });
             }
-            @Override public void onExecuteWrite(BluetoothDevice d,int request,boolean execute) {post(() -> server.sendResponse(d,request,BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED,0,null));}
+            @Override public void onExecuteWrite(BluetoothDevice d,int request,boolean execute) {
+                android.util.Log.i("BoardSimWire", "slot="+slot+" peer="+d.getAddress()+" execute-write="+execute+" (long writes are not supported)");
+                post(() -> server.sendResponse(d,request,BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED,0,null));
+            }
             @Override public void onNotificationSent(BluetoothDevice d,int status) {post(() -> {
                 if(inFlight==null || !inFlight.link.device.equals(d))return;
                 inFlight=null;notifying=false;
@@ -285,10 +309,10 @@ final class Peripheral {
             Notification n=notifications.remove();
             if(links.get(n.link.device)!=n.link)continue;
             if(n.value.length>n.link.mtu-3) {
-                status("Quantum notification for "+n.link.device.getAddress()+" needs MTU >= "+(n.value.length+3)+"; fff4 is readable",true);
+                status("Notification for "+n.link.device.getAddress()+" needs MTU >= "+(n.value.length+3)+" (Quantum: fff4 is readable)",true);
                 continue;
             }
-            BluetoothGattCharacteristic c=characteristic(NOTIFY);c.setValue(n.value);notifying=true;inFlight=n;
+            BluetoothGattCharacteristic c=characteristic(n.uuid);c.setValue(n.value);notifying=true;inFlight=n;
             if(!server.notifyCharacteristicChanged(n.link.device,c,false))fail("Notification enqueue failed");
             return;
         }
