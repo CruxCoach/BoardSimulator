@@ -15,6 +15,7 @@ reads through ``GetManagedObjects``:
 
 # NOTE: no `from __future__ import annotations` here — dbus_fast reads
 # the D-Bus signatures from live method annotations at decoration time.
+import contextvars
 import logging
 import time
 from dataclasses import dataclass, field
@@ -147,6 +148,52 @@ def _option(options, key: str):
     return getattr(raw, "value", raw)
 
 
+@dataclass(frozen=True)
+class WriteInfo:
+    """What BlueZ tells about one GATT write besides its bytes.
+
+    ``write_type`` is ``request`` (with response), ``command`` (without
+    response) or ``reliable`` (prepared/long write); ``mtu`` is the exchanged
+    ATT MTU (BlueZ 5.62+), ``peer`` the D-Bus device path. Each is ``None``
+    when BlueZ does not send it.
+    """
+
+    write_type: str | None = None
+    mtu: int | None = None
+    offset: int = 0
+    peer: str | None = None
+
+    @property
+    def address(self) -> str | None:
+        """``AA:BB:CC:DD:EE:FF`` from a ``…/dev_AA_BB_…`` device path."""
+        if not self.peer:
+            return None
+        tail = self.peer.rsplit("/", 1)[-1]
+        return tail[4:].replace("_", ":") if tail.startswith("dev_") else tail
+
+
+# Set around the write callback, so a session can read the write's context
+# without changing the on_data(bytes) signature every family shares.
+CURRENT_WRITE: contextvars.ContextVar[WriteInfo | None] = contextvars.ContextVar(
+    "boardsim_current_write", default=None)
+
+
+def current_write() -> WriteInfo | None:
+    """Context of the GATT write being handled right now, if any."""
+    return CURRENT_WRITE.get()
+
+
+def _write_info(options, peer: str | None) -> WriteInfo:
+    mtu = _option(options, "mtu")
+    offset = _option(options, "offset")
+    write_type = _option(options, "type")
+    return WriteInfo(
+        write_type=str(write_type) if write_type else None,
+        mtu=int(mtu) if mtu else None,
+        offset=int(offset) if offset else 0,
+        peer=peer)
+
+
 # ---------------------------------------------------------------------------
 # D-Bus GATT objects (BlueZ reads these through GetManagedObjects)
 # ---------------------------------------------------------------------------
@@ -190,11 +237,18 @@ class GattCharacteristic(ServiceInterface):
 
     @method()
     def ReadValue(self, options: "a{sv}") -> "ay":  # type: ignore  # noqa: N802
+        device = _option(options, "device")
+        peer = str(device) if device else None
         if self.read_callback:
-            device_option = options.get("device")
-            device = getattr(device_option, "value", device_option)
-            return bytearray(self.read_callback(str(device) if device else None))
-        return self._value
+            value = bytes(self.read_callback(peer))
+        else:
+            value = bytes(self._value)
+        offset = _option(options, "offset") or 0
+        logger.info("GATT read of %s by %s (offset %s, mtu %s): %d B %s",
+                    self._uuid, WriteInfo(peer=peer).address or "a central",
+                    offset, _option(options, "mtu") or "?", len(value),
+                    value[:32].hex() or "(empty)")
+        return bytearray(value)
 
     @method()
     def WriteValue(self, value: "ay", options: "a{sv}") -> None:  # type: ignore  # noqa: N802
@@ -204,19 +258,25 @@ class GattCharacteristic(ServiceInterface):
             return
         self._value = bytearray(value)
         if self.write_callback:
-            self.write_callback(bytes(value), peer)
+            token = CURRENT_WRITE.set(_write_info(options, peer))
+            try:
+                self.write_callback(bytes(value), peer)
+            finally:
+                CURRENT_WRITE.reset(token)
 
     @method()
     def StartNotify(self) -> None:  # type: ignore  # noqa: N802
         self._notifying = True
         self.emit_properties_changed({"Notifying": True})
-        logger.debug("StartNotify on %s", self.path)
+        logger.info("GATT subscribe (StartNotify) on %s %s", self._uuid,
+                    self.path)
 
     @method()
     def StopNotify(self) -> None:  # type: ignore  # noqa: N802
         self._notifying = False
         self.emit_properties_changed({"Notifying": False})
-        logger.debug("StopNotify on %s", self.path)
+        logger.info("GATT unsubscribe (StopNotify) on %s %s", self._uuid,
+                    self.path)
 
     def notify(self, value: bytes) -> None:
         """Update the characteristic and emit a BlueZ notification."""

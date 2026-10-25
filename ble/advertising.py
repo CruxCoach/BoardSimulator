@@ -37,7 +37,10 @@ def _uuid_to_le_bytes(uuid_str: str) -> bytes:
     return big_endian[::-1]  # reverse for little-endian
 
 
-def build_adv_data(uuid_str: str) -> bytes:
+LEGACY_ADV_LIMIT = 31
+
+
+def build_adv_data(uuid_str: str | None, name: str | None = None) -> bytes:
     """Build advertising data containing Flags + 128-bit Service UUID.
 
     AD Structure 1: Flags (3 bytes)
@@ -48,8 +51,19 @@ def build_adv_data(uuid_str: str) -> bytes:
 
     Total: 21 bytes (fits in 31-byte limit, also fits in 251-byte
     extended limit).
+
+    Without a UUID (a controller that advertises none, e.g. a Shiny Wall
+    simulated with --no-advertised-uuid) the packet carries the flags and,
+    when it fits, the Complete Local Name, the way an ESP32 advertises by
+    default; the scan response carries the name either way.
     """
     flags = bytes([0x02, 0x01, 0x06])
+    if not uuid_str:
+        if name:
+            name_ad = build_scan_response(name)
+            if len(flags) + len(name_ad) <= LEGACY_ADV_LIMIT:
+                return flags + name_ad
+        return flags
     uuid_bytes = _uuid_to_le_bytes(uuid_str)
     uuid_ad = bytes([0x11, 0x07]) + uuid_bytes
     return flags + uuid_ad
@@ -182,7 +196,7 @@ def set_virtual_adv_data(uuid_str: str, name: str, random_address: bytes,
     if len(random_address) != 6 or random_address[5] & 0xc0 != 0xc0:
         raise ValueError("random_address must be a 6-byte static BLE address")
 
-    adv_data = build_adv_data(uuid_str)
+    adv_data = build_adv_data(uuid_str, name)
     scan_rsp = build_scan_response(name)
     if len(scan_rsp) > 31:
         raise ValueError(f"BLE name is too long for a legacy scan response: {name!r}")
@@ -238,7 +252,7 @@ def configure_hardware_adv_set(uuid_str: str, name: str,
         raise ValueError("hardware advertising handle must be in 1..239")
     if len(random_address) != 6 or random_address[5] & 0xc0 != 0xc0:
         raise ValueError("random_address must be a 6-byte static BLE address")
-    adv_data = build_adv_data(uuid_str)
+    adv_data = build_adv_data(uuid_str, name)
     scan_rsp = build_scan_response(name)
     if len(scan_rsp) > 31:
         raise ValueError(f"BLE name is too long for a legacy scan response: {name!r}")
@@ -325,8 +339,12 @@ def set_extended_adv_data(uuid_str: str, name: str,
       4. LE Set Extended Scan Response Data (0x08|0x0038) -> device name
       5. LE Set Extended Advertising Enable (0x08|0x0039) -> enable
     """
-    adv_data = build_adv_data(uuid_str)
+    adv_data = build_adv_data(uuid_str, name)
     scan_rsp = build_scan_response(name)
+    if len(scan_rsp) > LEGACY_ADV_LIMIT:
+        logger.error("[%s] BLE name %r needs a %d-byte scan response; a legacy "
+                     "scan response holds %d — the controller will reject it",
+                     adapter, name, len(scan_rsp), LEGACY_ADV_LIMIT)
 
     logger.info("[%s] Configuring Extended Advertising with legacy PDU "
                 "(handle 0x00)", adapter)

@@ -159,7 +159,8 @@ class BLEPeripheral:
                  on_fatal: Callable[[BaseException], None] | None = None,
                  multi_connect: bool = False,
                  adapter: str = DEFAULT_ADAPTER,
-                 readvertise_delay_s: float = 0.0) -> None:
+                 readvertise_delay_s: float = 0.0,
+                 att_log: bool = False) -> None:
         # Validate here rather than in the thread: a typo'd adapter is a
         # startup error, not a mysterious dead peripheral 50 ms later.
         self._adapter = normalize_adapter(adapter)
@@ -200,6 +201,9 @@ class BLEPeripheral:
         self._readvertise_delay_s = readvertise_delay_s
         # Set once _serve() knows them, so a runtime mode change can act.
         self._adv_context: tuple | None = None
+        # --att-log: sniff the HCI monitor channel and log every ATT PDU.
+        self._att_log = att_log
+        self._addresses: set[str] = set()
 
     @property
     def adapter(self) -> str:
@@ -285,15 +289,45 @@ class BLEPeripheral:
             if reply is None or reply.message_type == MessageType.ERROR:
                 return 0
             managed = reply.body[0]
-            return sum(
-                1 for path, ifaces in managed.items()
+            connected = {
+                path for path, ifaces in managed.items()
                 if self._owns_device_path(path)
                 and ifaces.get("org.bluez.Device1", {}).get("Connected")
                 and ifaces["org.bluez.Device1"]["Connected"].value
-            )
+            }
+            self._log_addresses(connected)
+            return len(connected)
         except Exception as exc:
             logger.debug("D-Bus connection count failed: %s", exc)
             return 0
+
+    def _log_addresses(self, paths: set[str]) -> None:
+        """Log each central that joins or leaves, by Bluetooth address."""
+        addresses = {path.rsplit("/", 1)[-1].removeprefix("dev_").replace("_", ":")
+                     for path in paths}
+        for address in sorted(addresses - self._addresses):
+            logger.info("[%s] Central %s connected", self._adapter, address)
+        for address in sorted(self._addresses - addresses):
+            logger.info("[%s] Central %s disconnected", self._adapter, address)
+        self._addresses = addresses
+
+    async def _start_att_log(self) -> asyncio.Task | None:
+        """Start the HCI-monitor ATT log, or warn and carry on without it."""
+        if not self._att_log:
+            return None
+        from ble.att_log import AttMonitor
+
+        quiet = [char.uuid for service in self._profile.services
+                 for char in service.characteristics if char.receives_writes]
+        monitor = AttMonitor(int(self._adapter.removeprefix("hci")), quiet)
+        try:
+            monitor.open()
+        except OSError as exc:
+            logger.warning("[%s] ATT log unavailable (HCI monitor socket: %s); "
+                           "needs root", self._adapter, exc)
+            return None
+        logger.info("[%s] ATT log active (HCI monitor channel)", self._adapter)
+        return asyncio.ensure_future(monitor.run())
 
     async def _check_hci_connections(self) -> bool:
         """Whether the controller reports an LE link, via hcitool.
@@ -393,6 +427,9 @@ class BLEPeripheral:
         except Exception as e:
             logger.warning("Could not set Adapter.Alias: %s", e)
 
+        # -- ATT log (before registering, so discovery is captured) -----
+        att_task = await self._start_att_log()
+
         # -- Register GATT application ---------------------------------
         app = build_application(self._profile, self._handle_gatt_write)
         self._app = app
@@ -428,15 +465,17 @@ class BLEPeripheral:
         # MoonBoard: the Nordic UART Service itself).
         uuid = self._profile.advertised_uuid
         if set_extended_adv_data(uuid, board_name, self._adapter):
-            logger.info("[%s] Service UUID injected into advertising data!",
-                        self._adapter)
+            logger.info("[%s] %s", self._adapter,
+                        "Service UUID injected into advertising data!" if uuid
+                        else "Advertising data set (no service UUID)")
         else:
             logger.warning(
                 "Could not inject UUID. Device visible as '%s' "
                 "but apps that filter on the UUID may not discover it.",
                 board_name)
 
-        logger.info("[%s] Advertising UUID: %s", self._adapter, uuid)
+        logger.info("[%s] Advertising UUID: %s", self._adapter,
+                    uuid or "(none)")
         logger.info("Connection mode: %s",
                     "multi" if self._multi_connect else "single (exclusive)")
         # Lets set_multi_connect() act on a running peripheral.
@@ -560,6 +599,8 @@ class BLEPeripheral:
                     poll_ticks = 0
                     await _recount("poll")
         finally:
+            if att_task is not None:
+                att_task.cancel()
             # Explicitly tear the GATT app + advertising down on this loop so a
             # board switch leaves NO stale application registered with BlueZ.
             # (Relying on the dropped D-Bus socket alone left the old app live:

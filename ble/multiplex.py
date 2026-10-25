@@ -66,7 +66,8 @@ class MultiplexedBLEPeripheral:
                  multi_connect: bool = False,
                  adapter: str = DEFAULT_ADAPTER,
                  readvertise_delay_s: float = 0.0,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+                 clock: Callable[[], float] = time.monotonic,
+                 att_log: bool = False) -> None:
         if len(boards) != 2:
             raise ValueError("the multiplexed peripheral requires exactly two boards")
         if boards[0].address == boards[1].address:
@@ -95,6 +96,7 @@ class MultiplexedBLEPeripheral:
         self._clock = clock
         self._quiet_until = [0.0, 0.0]
         self._sync_needed = False
+        self._att_log = att_log
         self._app = None
         self._slot_read_values = [
             self._initial_read_values(board.profile) for board in boards]
@@ -406,6 +408,7 @@ class MultiplexedBLEPeripheral:
         gatt_mgr = adapter.get_interface(GATT_MANAGER_IFACE)
         registered = False
         monitor_task: asyncio.Task | None = None
+        att_task: asyncio.Task | None = None
         configured: list[int] = []
         try:
             self._bus.export(app.path, app)
@@ -436,6 +439,19 @@ class MultiplexedBLEPeripheral:
                 self._adapter_index, self._handle_hci_event)
             self._monitor.open()
             monitor_task = asyncio.create_task(self._monitor.run())
+            if self._att_log:
+                from ble.att_log import AttMonitor
+                att_monitor = AttMonitor(self._adapter_index, [
+                    char.uuid for service in self._profile.services
+                    for char in service.characteristics if char.receives_writes])
+                try:
+                    att_monitor.open()
+                    att_task = asyncio.create_task(att_monitor.run())
+                    logger.info("[%s] ATT log active (HCI monitor channel)",
+                                self._adapter)
+                except OSError as exc:
+                    logger.warning("[%s] ATT log unavailable: %s",
+                                   self._adapter, exc)
 
             for slot, (board, handle) in enumerate(
                     zip(self._boards, self.ADV_HANDLES)):
@@ -461,6 +477,8 @@ class MultiplexedBLEPeripheral:
                 if self._sync_needed:
                     await self._sync_advertising()
         finally:
+            if att_task is not None:
+                att_task.cancel()
             if monitor_task is not None:
                 monitor_task.cancel()
                 try:
