@@ -616,7 +616,9 @@ adb logcat -s BoardSimUI BoardSimWire
 7. Disconnect: `LINK … disconnected (reason …)`, `Link ended: … stay lit`.
 
 Any `GARBAGE`, `LEGACY`, `COMMAND`, `INVALID`, `UNKNOWN-CODE` or `ABORT`
-line is a finding: it names the bytes that did not fit the protocol.
+line is a finding: it names the bytes that did not fit the protocol. With a
+geometry file (`--shiny-geometry`), `ABSENT` flags a lit index that has no
+hold on that wall.
 
 Then run CruxCoach against the same simulator: its scanner lists
 `ShinyWall_STP_…` as a Shiny Wall; sending a route must produce the same

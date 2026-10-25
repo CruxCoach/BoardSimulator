@@ -351,6 +351,26 @@ class TestGeometry:
         session = make(geometry_path=str(path))
         assert session.hold_count == 3
 
+    def test_placeholders_and_absent_holds(self, tmp_path, caplog) -> None:
+        path = tmp_path / "geometry.json"
+        path.write_text(json.dumps({
+            "format": GEOMETRY_FORMAT,
+            "variants": {"st1": {"hold_count": 4, "confidence": "high", "holds": [
+                {"index": 0, "x": 0.5, "y": 1.5, "kind": "big", "present": True},
+                {"index": 1, "x": None, "y": None, "kind": "placeholder", "present": False},
+                {"index": 2, "x": 1.0, "y": 0.0, "kind": "small", "present": False},
+                {"index": 3, "x": 1.0, "y": 0.6667, "kind": "small", "present": True}]}}}))
+        variant = board_for("shinywall").variant_for("st1")
+        geometry = ShinyWallGeometry(variant, path=str(path))
+        assert [h.index for h in geometry.holds] == [0, 3]
+        assert geometry.absent == {1, 2} and geometry.hold(3).kind == "small"
+        assert render_holds_text(geometry, {0: 2, 3: 8}).splitlines() == ["S", " T"]
+        session = make(geometry_path=str(path))
+        caplog.set_level(logging.INFO)
+        session.feed(b"+2040.")
+        assert "ABSENT lit index(es) [2]" in caplog.text
+        assert session.state.get_holds() == {0: 2, 2: 4}  # shown, but reported
+
     def test_geometry_file_errors_are_loud(self, tmp_path) -> None:
         variant = board_for("shinywall").variant_for("st2")
         path = tmp_path / "g.json"

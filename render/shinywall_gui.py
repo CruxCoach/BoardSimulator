@@ -114,7 +114,8 @@ class ShinyWallGUI:
             x, y = off_x + u * board_w, off_y + v * board_h
             code = self._holds.get(hold.index)
             if not code:
-                canvas.create_oval(x - dot, y - dot, x + dot, y + dot,
+                size = dot * (0.7 if hold.kind == "small" else 1.0)
+                canvas.create_oval(x - size, y - size, x + size, y + size,
                                    fill=DOT, outline="")
                 continue
             color = ROLE_COLORS.get(code, UNKNOWN_COLOR)

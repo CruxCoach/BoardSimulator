@@ -17,15 +17,20 @@ logger = logging.getLogger(__name__)
 
 
 def render_holds_text(geometry: ShinyWallGeometry, holds: ShinyHoldMap) -> str:
-    """The wall as text: one character per grid cell, top row first."""
-    width, height = geometry.text_grid()
-    grid = [[" "] * width for _ in range(height)]
+    """The wall as text, top row first.
+
+    Every distinct height is one line and every distinct horizontal
+    position one column, so offset rows (half-cell x) and uneven row
+    heights from a geometry file stay readable.
+    """
+    columns = {x: i for i, x in enumerate(sorted({h.x for h in geometry.holds}))}
+    rows = {y: i for i, y in enumerate(sorted({h.y for h in geometry.holds},
+                                              reverse=True))}
+    grid = [[" "] * len(columns) for _ in rows]
     for hold in geometry.holds:
-        col = round(hold.x - geometry.min_x)
-        row = height - 1 - round(hold.y - geometry.min_y)
-        if 0 <= row < height and 0 <= col < width:
-            code = holds.get(hold.index)
-            grid[row][col] = "." if not code else ROLE_LETTERS.get(code, "?")
+        code = holds.get(hold.index)
+        grid[rows[hold.y]][columns[hold.x]] = (
+            "." if not code else ROLE_LETTERS.get(code, "?"))
     return "\n".join("".join(line).rstrip() for line in grid)
 
 

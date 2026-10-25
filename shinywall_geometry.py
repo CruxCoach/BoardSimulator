@@ -6,7 +6,10 @@ hold list lives in the vendor backend), so the simulator has two sources:
 
 - a geometry file in the ``cruxcoach-shinywall-geometry-v1`` format
   (``--shiny-geometry PATH``, or ``data/shinywall_geometry_v1.json`` when
-  present): ``x``/``y`` per hold index in grid units, origin bottom left;
+  present): ``x``/``y`` per hold index in grid units, origin bottom left.
+  Indices without a position (``x`` null) or without a physical hold
+  (``present: false``) exist in the state vector but are not drawn; the
+  session warns when an app lights one;
 - otherwise a placeholder: index order on the variant's grid, row by row
   from the bottom left. It shows which index lit, not where the hold is.
 """
@@ -14,7 +17,6 @@ hold list lives in the vendor backend), so the simulator has two sources:
 from __future__ import annotations
 
 import json
-import math
 import os
 from dataclasses import dataclass
 
@@ -32,6 +34,7 @@ class ShinyHold:
     x: float
     y: float
     name: str | None = None
+    kind: str | None = None   # big | kicker | small (geometry file only)
 
 
 def _load(path: str) -> dict:
@@ -75,6 +78,9 @@ class ShinyWallGeometry:
                            "not the real layout")
             self.is_placeholder = True
         self._by_index = {hold.index: hold for hold in self.holds}
+        # Vector positions that carry no hold on this wall (send 0 there).
+        self.absent = frozenset(i for i in range(self.hold_count)
+                                if i not in self._by_index) if entry else frozenset()
         xs = [h.x for h in self.holds] or [0.0]
         ys = [h.y for h in self.holds] or [0.0]
         self.min_x, self.max_x = min(xs), max(xs)
@@ -84,9 +90,11 @@ class ShinyWallGeometry:
         holds = []
         for raw in entry.get("holds", []):
             index = int(raw["index"])
-            if 0 <= index < self.hold_count:
-                holds.append(ShinyHold(index, float(raw["x"]), float(raw["y"]),
-                                       raw.get("name")))
+            if (not 0 <= index < self.hold_count or raw.get("present") is False
+                    or raw.get("x") is None or raw.get("y") is None):
+                continue
+            holds.append(ShinyHold(index, float(raw["x"]), float(raw["y"]),
+                                   raw.get("name"), raw.get("kind")))
         return holds
 
     def _placeholder(self) -> list[ShinyHold]:
@@ -118,8 +126,3 @@ class ShinyWallGeometry:
         u = (hold.x - self.min_x + 0.5) / width
         v = 1.0 - (hold.y - self.min_y + 0.5) / height
         return u, v
-
-    def text_grid(self) -> tuple[int, int]:
-        """Character grid size for the headless renderer."""
-        width, height = self.span
-        return max(1, math.ceil(width)), max(1, math.ceil(height))

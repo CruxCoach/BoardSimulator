@@ -187,6 +187,11 @@ class ShinyWallSession(Session):
     def _log_event(self, event, link: _ShinyLink | None = None) -> None:
         self.events.append(event)
         name = event.kind.upper()
+        if event.kind == "state":
+            ghosts = sorted(set(event.indices) & self.geometry.absent)
+            if ghosts:
+                logger.warning("ABSENT lit index(es) %s carry no hold on this "
+                               "wall per the geometry file (should be 0)", ghosts)
         if event.kind == "state" and link is not None:
             types: dict[str, int] = {}
             for write_type, _size in link.message:
