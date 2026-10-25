@@ -165,3 +165,16 @@ For each configuration:
 
 Use existing `tests/test_ble_mock_client.py` where applicable for a real external
 central. A successful mock-client run is not a substitute for official-app tests.
+
+## Shiny Wall against the official app
+
+The Android app simulates a Shiny Wall for the official Shiny Wall app on a
+second phone (the phone running the official app cannot be the wall). Choose
+Board **Shiny Wall** and the layout, type the wall's stored controller name
+into **Advertised name** (the official app connects to the first device whose
+name contains it, `ShinyWall_` when none is stored), optionally untick
+**Advertise service UUID** or tick **Reply OK** (traverses), then Start BLE and
+keep the app in front. `adb logcat -s BoardSimUI BoardSimWire` shows every
+write with its type and ASCII text, MTU changes and subscriptions. The checks
+and the log lines that show them are in the README section "Testing with the
+official Shiny Wall app".
