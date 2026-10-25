@@ -104,10 +104,11 @@ class ShinyWallVariant:
     """One Shiny Wall Standard variant (``st0`` … ``st5``).
 
     Mirrors CruxCoach's ``ShinyWallVariant``. ``hold_count`` is the length of
-    a full state vector (the controller's ``realHoldsLength``); until the
-    official geometry is known it is the catalogue's highest hold number plus
-    one. ``name_code`` is the code in ``ShinyWall_<code>_<id>``; ``None``
-    means the Mini's fixed name.
+    a full state vector (the controller's ``realHoldsLength``), taken from the
+    derived geometry table (data/shinywall_geometry_v1.json): st2 476 and
+    st0 249 exceed the catalogue's highest hold number + 1 (475, 239).
+    ``name_code`` is the code in ``ShinyWall_<code>_<id>``; ``None`` means
+    the Mini's fixed name.
     """
 
     key: str
@@ -302,9 +303,9 @@ BOARDS: dict[str, Board] = {
         variants=(
             ShinyWallVariant("st1", "Standard", 311, 12, 35, "STP"),
             ShinyWallVariant("st4", "Standard Full", 401, 12, 35, "STF"),
-            ShinyWallVariant("st2", "Standard Max", 475, 18, 35, "STM"),
+            ShinyWallVariant("st2", "Standard Max", 476, 18, 35, "STM"),
             ShinyWallVariant("st5", "Standard Max Full", 611, 18, 35, "STMF"),
-            ShinyWallVariant("st0", "Standard Mini", 239, 12, 29, None),
+            ShinyWallVariant("st0", "Standard Mini", 249, 12, 29, None),
         ),
     ),
 }

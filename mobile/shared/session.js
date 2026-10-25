@@ -6,7 +6,7 @@
   class BoardSession {
     constructor(profile, api, emit, diagnostic=()=>{}) {
       this.profile=profile;this.api=api;this.emit=emit;this.diagnostic=diagnostic;
-      this.peers=new Map();this.quantum={};this.stateValue=[1,71,0,0];
+      this.peers=new Map();this.quantum={};this.shinyWall={state:{}};this.stateValue=[1,71,0,0];
     }
     decoder(peer) {
       if(!this.peers.has(peer)) {
@@ -15,7 +15,7 @@
         const p=this.profile;
         this.peers.set(peer,p.family==='aurora'?new root.BoardProtocols.Aurora(this.api,emit,report):
           p.family==='moonboard'?new root.BoardProtocols.Moon(p.rows,emit,report):
-          p.family==='shinywall'?new root.BoardProtocols.ShinyWall(p.holdCount,emit,report,p.shiny||{}):
+          p.family==='shinywall'?new root.BoardProtocols.ShinyWall(p.holdCount,emit,report,Object.assign({},p.shiny,{shared:this.shinyWall})):
           new root.Quantum(p.addresses,emit,report,this.quantum));
       }
       return this.peers.get(peer);

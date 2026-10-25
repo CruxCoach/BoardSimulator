@@ -84,6 +84,8 @@ shinyBoard.feed('A',vector.slice(0,100));
 assert.deepEqual(shinyBoard.feed('B',[45]),[{notify:[79,75]}],'B clears and is acknowledged');
 assert.deepEqual(shinyBoard.feed('A',vector.slice(100)),[{notify:[79,75]}]);
 assert.deepEqual(lit.map(h=>h[0]),[0,310],'A finishes its route despite B');
+shinyBoard.feed('B',Array.from(Buffer.from('*4005.')));
+assert.deepEqual(lit.map(h=>h[0]),[0,5,310],"B's route-editor hold lands on A's route (one wall)");
 shinyBoard.feed('A',vector.slice(0,10));shinyBoard.disconnect('A');
 assert.ok(shinyReports.some(r=>r.includes("ABORT link ended inside a state vector")));
 {const {ShinyWall}=require('../shared/protocols.js');let wall=[];

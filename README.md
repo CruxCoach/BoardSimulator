@@ -217,7 +217,7 @@ Shiny Wall only (each aborts with an error on other boards):
 | `--name` | `ShinyWall_<code>_0001` | Exact advertised name, at most 29 bytes (more fails at startup). Codes: `STP` st1, `STF` st4, `STM` st2, `STMF` st5; st0 advertises `Shiny Wall ST0 (ShinyMini)` |
 | `--service-uuid` | `4fafc201-1fb5-459e-8fcc-c5c9c331914b` | Service holding the write characteristic `beb5483e-36e1-4688-b7f5-ea07361b26a8` |
 | `--no-advertised-uuid` | off | Advertise flags + name only |
-| `--shiny-holds` | variant | Holds in a state vector (st1 311, st4 401, st2 475, st5 611, st0 239 — provisional) |
+| `--shiny-holds` | variant | Holds in a state vector (st1 311, st4 401, st2 476, st5 611, st0 249) |
 | `--shiny-length` | `lenient` | Wrong vector length: `lenient` applies what fits and warns, `strict` rejects it |
 | `--shiny-codes` | `reject` | Digits other than 0/2/4/6/8: `reject` leaves the hold off, `accept` shows it as unknown |
 | `--shiny-mtu` | – | ATT MTU of the simulated controller; longer writes are dropped (pair with `ExchangeMTU`, see below) |
@@ -226,7 +226,7 @@ Shiny Wall only (each aborts with an error on other boards):
 | `--shiny-props` | `read,write,write-without-response,notify` | Properties of the write characteristic |
 | `--shiny-ack` | off | Notify `OK` after every understood message (the official app waits for it in traverses) |
 | `--shiny-notify-uuid` | – | Extra notify-only characteristic; `--shiny-ack` then notifies there |
-| `--shiny-geometry` | `data/shinywall_geometry_v1.json` if present | Hold positions (`cruxcoach-shinywall-geometry-v1`); otherwise index order on the grid |
+| `--shiny-geometry` | `data/shinywall_geometry_v1.json` | Hold positions (`cruxcoach-shinywall-geometry-v1`); without a file, index order on the grid |
 
 Aurora-specific options on the MoonBoard, Quantum or Shiny Wall abort with a
 clear error message — as does a start without a BlueZ/Bluetooth adapter
@@ -371,7 +371,7 @@ ble/
 render/                 GUI + headless per family
 board_geometry.py       LED↔hole coordinates, edges, roles (SQLite)
 quantum_geometry.py     Quantum address/coordinate lookup
-shinywall_geometry.py   Shiny Wall hold positions (geometry file or index order)
+shinywall_geometry.py   Shiny Wall hold positions (geometry table or index order)
 board_state.py          Thread-safe board state per family
 role_colors.py          Wire color → board-local role
 data/<brand>.sqlite3    Trimmed official board DBs
@@ -490,7 +490,9 @@ MTU − 5 bytes:
 |---------|---------|-----------|
 | `-` | Clear the wall (no dot) | applied |
 | `+<d0><d1>…<dN>.` | One digit per hold 0…hold count − 1: 0 off, 2 start, 4 hand, 6 foot, 8 top | applied |
-| `*<x>.` | Single hold / game command | logged |
+| `*<r><id>.` | Set one hold (the app's route editor, no `-` before): role digit 0 off, 1 start, 2 hand, 3 foot, 4 top; hold id = vector index | applied to the current wall |
+| `*@.` | Disco mode (maintenance) | logged |
+| `*a/b/….` | Game command | logged |
 | `f<n>.` | Init foot LEDs, sent once after connecting when the wall has it set | logged |
 | anything else | Unknown command; the old draft `.c0+c1+….` is reported as such | logged |
 
@@ -501,14 +503,19 @@ an `OK` notification on the same characteristic only in traverses
 (`--shiny-ack`). The simulator's defaults are assumptions where the firmware
 is unknown: it keeps a partial message across writes, `-` always clears, a
 wrong vector length is applied as far as it fits, and LEDs stay lit after a
-disconnect. Each of these has a flag to test the stricter behaviour.
+disconnect. The last two have flags (`--shiny-length`,
+`--shiny-on-disconnect`), as do the MTU, a processing delay and the `OK`
+reply; buffering across writes and `-` aborting a partial message have none.
 
-Hold counts (st1 311, st4 401, st2 475, st5 611, st0 239) are the catalogue's
-highest hold numbers plus one, as in CruxCoach. The official app sends as
-many digits as the wall's hold list in its backend spans, so a `LENGTH` line
-in the log shows the real count of that wall. Positions: without a geometry
-file the simulator draws the holds in index order on the variant's grid
-(12×35, 18×35, Mini 12×29) and says so in the legend.
+Hold counts (st1 311, st4 401, st2 476, st5 611, st0 249) come from the
+derived geometry table, as in CruxCoach; st2 and st0 are one row structure
+larger than the catalogue's highest hold number + 1 (475, 239). The official
+app sends as many digits as the wall's hold list in its backend spans, so a
+`LENGTH` line in the log shows the real count of that wall. Positions come
+from `data/shinywall_geometry_v1.json`: indices without a hold there (st1
+220, st2 340, st5 340/464/518) are not drawn, and lighting one logs
+`ABSENT`. Without the file the simulator draws the holds in index order on
+the variant's grid and says so in the legend.
 
 ### Roles & colors (board-local!)
 
@@ -525,6 +532,17 @@ finish=red, foot=cyan, …). The Shiny Wall's codes are drawn as start green,
 hand blue, foot yellow, top red (the simulator's own neutral colours).
 
 ## Data provenance
+
+`data/shinywall_geometry_v1.json` is a derived number table (format
+`cruxcoach-shinywall-geometry-v1`, the table CruxCoach's Shiny Wall support
+is built on):
+per Standard variant the vector length and, per hold index, grid column/row,
+centre position and the hold's name as the official app labels it. It was
+derived from the official Shiny Wall app's rendering code and its public
+route catalogue (see the file's `provenance` and `notes`); it contains no
+images, no routes and no user data. The vendor keeps each wall's hold list in
+its backend, so a real wall can deviate; an official vendor table should
+replace this file.
 
 `data/<brand>.sqlite3` are trimmed copies of the official board
 databases (geometry/identity only). The five Aurora-family DBs are
@@ -612,7 +630,9 @@ adb logcat -s BoardSimUI BoardSimWire
    in the window (index numbers on each ring). A `LENGTH` warning means the
    wall in the app has another hold count — note it, restart with
    `--shiny-holds`.
-6. Clear / leave the route: `CLEAR`. Single holds or games: `SINGLE …`.
+6. Clear / leave the route: `CLEAR`. Tapping holds in the app's route editor:
+   `HOLD *<r><id>. hold <id> -> <role>` (applied on the current wall). Disco
+   mode and games: `DISCO …`, `GAME …` (contents worth noting).
 7. Disconnect: `LINK … disconnected (reason …)`, `Link ended: … stay lit`.
 
 Any `GARBAGE`, `LEGACY`, `COMMAND`, `INVALID`, `UNKNOWN-CODE` or `ABORT`

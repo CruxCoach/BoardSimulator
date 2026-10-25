@@ -89,7 +89,10 @@ def shiny_writes(holds: int) -> list[bytes | None]:
                bytes(bad), b"f3.", b"*12/4.", b"Z9.\x00",
                b"." + b"+".join(b"0" for _ in range(holds)) + b".",  # old format
                b"+" + b"4" * 5000 + b"." + vector[:30], None,      # overflow, link loss
-               vector, b"-"]
+               vector, b"*1" + str(holds - 1).encode() + b".",       # route editor
+               b"*0" + str(holds // 4).encode() + b".*3", b"7.*9 1.", # split, off, bad
+               b"*51.*1" + str(holds).encode() + b".*@.*3/5/7.*x.",  # unknown role, range
+               b"-"]
     return writes
 
 

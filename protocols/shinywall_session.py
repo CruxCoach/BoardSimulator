@@ -70,8 +70,8 @@ class ShinyWallSession(Session):
     WARN_LEVEL_EVENTS = {"garbage", "abort", "length", "invalid",
                          "unknown-code", "reject", "overflow", "command",
                          "legacy"}
-    MESSAGE_END = {"clear", "state", "reject", "single", "foot", "command",
-                   "legacy", "abort", "overflow"}
+    MESSAGE_END = {"clear", "state", "reject", "single", "hold", "disco",
+                   "game", "foot", "command", "legacy", "abort", "overflow"}
 
     def __init__(self, board: Board, variant,
                  options: ShinyWallOptions | None = None,
@@ -113,7 +113,8 @@ class ShinyWallSession(Session):
         if link is None:
             link = _ShinyLink(ShinyWallProtocol(
                 self.hold_count, self._queue_state,
-                self.options.length_mode, self.options.codes_mode))
+                self.options.length_mode, self.options.codes_mode,
+                current=self._wall))
             self._links[peer] = link
         return link
 
@@ -176,6 +177,10 @@ class ShinyWallSession(Session):
                         "centrals only)", len(acks), self._ack_uuid)
         return acks or None
 
+    def _wall(self) -> dict[int, int]:
+        """The wall as the next message sees it (shared by all centrals)."""
+        return self._pending[-1] if self._pending else self.state.get_holds()
+
     def _queue_state(self, state: dict[int, int]) -> None:
         self._pending.append(state)
 
@@ -186,12 +191,6 @@ class ShinyWallSession(Session):
 
     def _log_event(self, event, link: _ShinyLink | None = None) -> None:
         self.events.append(event)
-        name = event.kind.upper()
-        if event.kind == "state":
-            ghosts = sorted(set(event.indices) & self.geometry.absent)
-            if ghosts:
-                logger.warning("ABSENT lit index(es) %s carry no hold on this "
-                               "wall per the geometry file (should be 0)", ghosts)
         if event.kind == "state" and link is not None:
             types: dict[str, int] = {}
             for write_type, _size in link.message:
@@ -200,10 +199,15 @@ class ShinyWallSession(Session):
             mix = ", ".join(f"{t}x{n}" for t, n in types.items())
             logger.info("STATE %s — from %d write(s) (%s), sizes %s",
                         event.detail, len(sizes), mix, sizes)
-            return
-        level = (logging.WARNING if event.kind in self.WARN_LEVEL_EVENTS
-                 else logging.INFO)
-        logger.log(level, "%s %s", name, event.detail)
+        else:
+            level = (logging.WARNING if event.kind in self.WARN_LEVEL_EVENTS
+                     else logging.INFO)
+            logger.log(level, "%s %s", event.kind.upper(), event.detail)
+        if event.kind in ("state", "hold"):
+            ghosts = sorted(set(event.indices) & self.geometry.absent)
+            if ghosts:
+                logger.warning("ABSENT lit index(es) %s carry no hold on this "
+                               "wall per the geometry file (should be 0)", ghosts)
 
     def connection_lost(self) -> None:
         """The last central left: drop partial messages, keep or clear LEDs."""

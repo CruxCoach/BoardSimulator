@@ -57,11 +57,14 @@ assert.ok(diagnostics.includes('Moon frame overflow'));
 // Shiny Wall: one catalog entry per variant, no vendor image, schematic points.
 const shiny=catalog.filter(item=>item.family==='shinywall');
 assert.deepEqual(shiny.map(item=>[item.layout,item.holdCount,item.name]),[
-  ['st1',311,'ShinyWall_STP_0001'],['st4',401,'ShinyWall_STF_0001'],['st2',475,'ShinyWall_STM_0001'],
-  ['st5',611,'ShinyWall_STMF_0001'],['st0',239,'Shiny Wall ST0 (ShinyMini)']]);
+  ['st1',311,'ShinyWall_STP_0001'],['st4',401,'ShinyWall_STF_0001'],['st2',476,'ShinyWall_STM_0001'],
+  ['st5',611,'ShinyWall_STMF_0001'],['st0',249,'Shiny Wall ST0 (ShinyMini)']]);
 for(const item of shiny) {
   assert.equal(item.image,undefined,item.id);
   assert.equal(item.notifyUuid,'beb5483e-36e1-4688-b7f5-ea07361b26a8');
-  assert.equal(Object.keys(item.points).length,item.holdCount,item.id);
+  // Geometry table: a few vector indices carry no hold and are not drawn.
+  const drawn=Object.keys(item.points).length;
+  assert.ok(drawn<=item.holdCount&&drawn>=item.holdCount-3,item.id+' '+drawn);
+  assert.match(item.positions,/shinywall_geometry_v1\.json/);
 }
 console.log(`${checks} fragmented conformance replays passed; ${catalog.length} configurations, palettes, assets, isolation and buffer limits checked`);

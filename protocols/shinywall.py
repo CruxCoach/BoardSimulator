@@ -8,7 +8,11 @@ APP-BEHAVIOUR-REPORT; no firmware or hardware was available):
 - ``+<digits>.`` sets the whole wall: one digit per physical hold
   ``0 … hold_count-1`` without separators (0 off, 2 start, 4 hand, 6 foot,
   8 top). The official app sends ``-`` first, then this vector.
-- ``*<x>.`` single hold / game command (format not confirmed: logged only).
+- ``*<r><id>.`` sets one hold without clearing (the official app's route
+  editor): role digit ``r`` (0 off, 1 start, 2 hand, 3 foot, 4 top — not the
+  vector codes) and the hold id, taken as the vector index. ``*@.`` is the
+  disco mode (maintenance) and ``*a/b/….`` a game command; both are logged
+  only, their effect is not known.
 - ``f<initFootLeds>.`` sent once after connecting when the wall has the
   setting (meaning unknown: logged only).
 - anything else ending in ``.`` is an unknown command (logged only); the
@@ -60,6 +64,11 @@ ROLE_RGB: dict[int, tuple[int, int, int]] = {
     CODE_FOOT: (255, 210, 31), CODE_TOP: (255, 59, 59),
 }
 UNKNOWN_RGB = (255, 255, 255)
+# Role digits of the single-hold command '*<r><id>.' (the app's route
+# editor), mapped to the vector codes.
+EDITOR_ROLES: dict[int, int] = {
+    0: CODE_OFF, 1: CODE_START, 2: CODE_HAND, 3: CODE_FOOT, 4: CODE_TOP,
+}
 
 CMD_CLEAR = ord("-")
 CMD_STATE = ord("+")
@@ -98,15 +107,19 @@ EV_UNKNOWN = "unknown-code"
 EV_REJECT = "reject"
 EV_STATE = "state"
 EV_SINGLE = "single"
+EV_HOLD = "hold"
+EV_DISCO = "disco"
+EV_GAME = "game"
 EV_FOOT = "foot"
 EV_COMMAND = "command"
 EV_LEGACY = "legacy"
 EV_OVERFLOW = "overflow"
 EVENT_KINDS = (EV_GARBAGE, EV_ABORT, EV_CLEAR, EV_LENGTH, EV_INVALID,
-               EV_UNKNOWN, EV_REJECT, EV_STATE, EV_SINGLE, EV_FOOT,
-               EV_COMMAND, EV_LEGACY, EV_OVERFLOW)
+               EV_UNKNOWN, EV_REJECT, EV_STATE, EV_SINGLE, EV_HOLD, EV_DISCO,
+               EV_GAME, EV_FOOT, EV_COMMAND, EV_LEGACY, EV_OVERFLOW)
 # Messages the controller understood (acknowledged with "OK" when enabled).
-UNDERSTOOD = frozenset({EV_CLEAR, EV_STATE, EV_SINGLE, EV_FOOT})
+UNDERSTOOD = frozenset({EV_CLEAR, EV_STATE, EV_HOLD, EV_DISCO, EV_GAME,
+                        EV_FOOT})
 
 
 @dataclass(frozen=True)
@@ -221,7 +234,10 @@ class ShinyWallProtocol:
     """Streaming decoder for one central's writes.
 
     ``on_state`` receives the complete new wall state (hold index -> code,
-    lit holds only) after every clear and every applied vector.
+    lit holds only) after every clear, applied vector and single-hold
+    command. A single-hold command changes the wall as ``current()`` returns
+    it (the session passes the wall shared by all centrals); by default the
+    decoder's own last state.
     """
 
     COMMAND_LIMIT = 4096
@@ -230,7 +246,8 @@ class ShinyWallProtocol:
                  on_state: Callable[[dict[int, int]], None],
                  length_mode: str = LENGTH_LENIENT,
                  codes_mode: str = CODES_REJECT,
-                 max_message_bytes: int | None = None) -> None:
+                 max_message_bytes: int | None = None,
+                 current: Callable[[], Mapping[int, int]] | None = None) -> None:
         if hold_count < 1:
             raise ValueError("hold_count must be positive")
         self.hold_count = hold_count
@@ -239,6 +256,8 @@ class ShinyWallProtocol:
         self.max_message_bytes = max_message_bytes or max(
             self.COMMAND_LIMIT, 4 * hold_count)
         self._on_state = on_state
+        self._last: dict[int, int] = {}
+        self._current = current or (lambda: self._last)
         self._command: int | None = None   # command byte of the open message
         self._discarding = False
         self._payload = bytearray()
@@ -302,7 +321,11 @@ class ShinyWallProtocol:
     def _clear(self) -> None:
         self.messages += 1
         self._emit(EV_CLEAR, "'-': all holds off")
-        self._on_state({})
+        self._publish({})
+
+    def _publish(self, state: dict[int, int]) -> None:
+        self._last = state
+        self._on_state(state)
 
     def _byte(self, byte: int) -> None:
         if byte == CMD_CLEAR:
@@ -349,8 +372,7 @@ class ShinyWallProtocol:
         if command == CMD_STATE:
             self._vector(payload)
         elif command == CMD_SINGLE:
-            self._emit(EV_SINGLE, f"single-hold command *{_shown(payload)[1:-1]}. "
-                       "(format not confirmed; logged, not applied)")
+            self._single(payload)
         elif command == CMD_FOOT:
             self._emit(EV_FOOT, f"init foot LEDs f{_shown(payload)[1:-1]}. "
                        "(meaning unknown; logged, not applied)")
@@ -409,7 +431,41 @@ class ShinyWallProtocol:
         self._emit(EV_STATE, f"{min(count, self.hold_count)} codes applied — "
                    f"{summarize(state)}; {self.hold_count - len(state)} off",
                    sorted(state))
-        self._on_state(state)
+        self._publish(state)
+
+    def _single(self, payload: bytes) -> None:
+        shown = f"*{_shown(payload)[1:-1]}."
+        if payload == b"@":
+            self._emit(EV_DISCO, f"{shown} disco mode (maintenance; logged, "
+                       "not applied)")
+            return
+        if b"/" in payload:
+            self._emit(EV_GAME, f"{shown} game command (format not confirmed; "
+                       "logged, not applied)")
+            return
+        if len(payload) < 2 or not payload.isdigit():
+            self._emit(EV_SINGLE, f"{shown} not understood (expected "
+                       "*<role><id>., *@. or a game *a/b/….); ignored")
+            return
+        role, index = payload[0] - 0x30, int(payload[1:])
+        if role not in EDITOR_ROLES:
+            self._emit(EV_UNKNOWN, f"{shown} role {role} unknown (0 off, 1 start, "
+                       "2 hand, 3 foot, 4 top); ignored")
+            return
+        if index >= self.hold_count:
+            self._emit(EV_INVALID, f"{shown} hold {index} is beyond the wall "
+                       f"(holds 0..{self.hold_count - 1}); ignored", (index,))
+            return
+        wall = dict(self._current())
+        code = EDITOR_ROLES[role]
+        if code:
+            wall[index] = code
+        else:
+            wall.pop(index, None)
+        self._emit(EV_HOLD, f"{shown} hold {index} -> "
+                   f"{ROLE_NAMES.get(code, 'off')}; {len(wall)} lit",
+                   (index,) if code else ())
+        self._publish(wall)
 
 
 # -- reference encoder (tests, mock client, mobile fixtures) -----------------
@@ -433,6 +489,12 @@ def chunks(message: bytes, mtu: int = 23) -> list[bytes]:
     """Split a message like the official app: ``max(MTU - 5, 18)`` bytes."""
     size = max(mtu - CHUNK_OVERHEAD, MIN_CHUNK_BYTES)
     return [message[i:i + size] for i in range(0, len(message), size)] or [b""]
+
+
+def encode_hold(index: int, code: int) -> bytes:
+    """``*<role><id>.`` for one hold, as the official app's route editor."""
+    role = {c: r for r, c in EDITOR_ROLES.items()}[code]
+    return f"*{role}{index}.".encode()
 
 
 def route_writes(holds: Mapping[int, int], hold_count: int,

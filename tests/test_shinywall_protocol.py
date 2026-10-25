@@ -109,12 +109,39 @@ class TestStreams:
         accepted, _, _ = replay(stream, size, codes_mode=CODES_ACCEPT)
         assert accepted == [{**ROUTE, 10: 5, 11: 9}]
 
-    def test_single_and_foot_commands_are_logged_only(self, size) -> None:
-        stream = b"f3." + b"*12/4." + route(ROUTE)
+    def test_foot_disco_and_game_commands_are_logged_only(self, size) -> None:
+        stream = b"f3." + b"*12/4." + b"*@." + route(ROUTE)
         states, kinds, events = replay(stream, size)
         assert states == [ROUTE]
-        assert kinds == ["foot", "single", "state"]
+        assert kinds == ["foot", "game", "disco", "state"]
         assert "f3." in events[0].detail and "*12/4." in events[1].detail
+
+    def test_single_hold_edits_change_the_current_wall(self, size) -> None:
+        stream = route(ROUTE) + b"*1123." + b"*0040." + b"*4005." + b"*2001."
+        states, kinds, events = replay(stream, size)
+        assert kinds == ["state", "hold", "hold", "hold", "hold"]
+        after = dict(ROUTE)
+        after[123] = CODE_START
+        assert states[1] == after
+        del after[40]
+        assert states[2] == after
+        after[5] = CODE_TOP
+        assert states[3] == after
+        after[1] = CODE_HAND             # a start becomes a hand
+        assert states[4] == after
+        assert events[1].indices == (123,) and events[2].indices == ()
+
+    def test_single_hold_without_route_starts_from_dark(self, size) -> None:
+        states, kinds, _ = replay(b"-*3007.", size)
+        assert states == [{}, {7: CODE_FOOT}]
+        assert kinds == ["clear", "hold"]
+
+    def test_bad_single_hold_commands_change_nothing(self, size) -> None:
+        stream = b"*1." + b"*9 1." + b"*51." + b"*1311." + b"*x."
+        states, kinds, events = replay(stream, size)
+        assert states == []
+        assert kinds == ["single", "single", "unknown-code", "invalid", "single"]
+        assert events[3].indices == (311,)
 
     def test_unknown_command_is_reported(self, size) -> None:
         states, kinds, events = replay(b"Z99." + route(ROUTE), size)
@@ -177,6 +204,13 @@ class TestTransport:
         assert [e.kind for e in events] == ["garbage", "clear"]
         assert "6 B" in events[0].detail
 
+    def test_current_wall_comes_from_the_provider(self) -> None:
+        states: list = []
+        shared = {9: CODE_TOP}
+        decoder = ShinyWallProtocol(HOLDS, states.append, current=lambda: shared)
+        decoder.feed(b"*15.")
+        assert states == [{9: CODE_TOP, 5: CODE_START}]
+
     def test_messages_counter(self) -> None:
         decoder = ShinyWallProtocol(HOLDS, lambda _s: None)
         decoder.feed(b"-" + route(ROUTE) + b"*1.")
@@ -184,6 +218,11 @@ class TestTransport:
 
 
 class TestEncoder:
+    def test_hold_format(self) -> None:
+        from protocols.shinywall import encode_hold
+        assert encode_hold(123, CODE_START) == b"*1123."
+        assert encode_hold(7, 0) == b"*07."
+
     def test_vector_format(self) -> None:
         assert encode_vector([0, 2, 4, 6, 8]) == b"+02468."
         with pytest.raises(ValueError):

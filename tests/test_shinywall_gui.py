@@ -41,6 +41,9 @@ class Canvas:
 
 
 def test_lit_holds_are_role_rings_with_their_index(monkeypatch) -> None:
+    import shinywall_geometry
+
+    monkeypatch.setattr(shinywall_geometry, "DEFAULT_GEOMETRY_PATH", "/nonexistent")
     gui = load_gui(monkeypatch)
     panel = object.__new__(gui.ShinyWallGUI)
     panel._geometry = ShinyWallGeometry(board_for("shinywall").variant_for("st1"))

@@ -77,7 +77,10 @@
   const SHINY_RGB={2:[34,221,68],4:[58,140,255],6:[255,210,31],8:[255,59,59]};
   const SHINY_UNKNOWN_RGB=[255,255,255];
   const SHINY_KNOWN=new Set([0,2,4,6,8]);
-  const SHINY_UNDERSTOOD=new Set(['clear','state','single','foot']);
+  const SHINY_UNDERSTOOD=new Set(['clear','state','hold','disco','game','foot']);
+  // '*<r><id>.' role digits (the app's route editor) -> vector codes.
+  const SHINY_EDITOR=[0,2,4,6,8];
+  const SHINY_ROLE_NAMES={2:'start',4:'hand',6:'foot',8:'top'};
   const DASH=45,PLUS=43,STAR=42,FOOT=102,DOT=46;
   function ascii(bytes) {
     return Array.from(bytes.slice(0,48),b=>b>=32&&b<127?String.fromCharCode(b):'\\x'+b.toString(16).padStart(2,'0')).join('')+
@@ -87,7 +90,9 @@
     constructor(holdCount,emit,diagnostic=()=>{},options={}) {
       this.holdCount=holdCount;this.emit=emit;this.diagnostic=diagnostic;
       this.strict=options.length==='strict';this.accept=options.codes==='accept';this.ack=!!options.ack;
-      this.limit=Math.max(4096,4*holdCount);this.events=[];this.state={};
+      this.limit=Math.max(4096,4*holdCount);this.events=[];
+      // The wall a '*' edit changes; BoardSession shares it across centrals.
+      this.shared=options.shared||{state:{}};
       this.command=null;this.discarding=false;this.payload=[];this.garbage=[];this.garbageTotal=0;
     }
     report(kind,detail) {
@@ -95,7 +100,7 @@
       if(this.ack&&SHINY_UNDERSTOOD.has(kind))this.updates.push({notify:[79,75]});
     }
     publish(state) {
-      this.state=state;
+      this.shared.state=state;
       this.emit(Object.keys(state).map(Number).sort((a,b)=>a-b).map(i=>[i,...(SHINY_RGB[state[i]]||SHINY_UNKNOWN_RGB)]));
     }
     endGarbage() {
@@ -145,10 +150,23 @@
     }
     dispatch(command,payload) {
       if(command===PLUS)this.vector(payload);
-      else if(command===STAR)this.report('single','single-hold command *'+ascii(payload)+'. (format not confirmed; logged, not applied)');
+      else if(command===STAR)this.single(payload);
       else if(command===FOOT)this.report('foot','init foot LEDs f'+ascii(payload)+'. (meaning unknown; logged, not applied)');
       else if(command>=48&&command<=57&&payload.includes(PLUS))this.report('legacy',"old dotted format; the controller expects '+', one digit per hold, '.'; ignored");
       else this.report('command',"unknown command '"+String.fromCharCode(command)+"' with payload '"+ascii(payload)+"'; ignored");
+    }
+    single(payload) {
+      const shown='*'+ascii(payload)+'.';
+      if(payload.length===1&&payload[0]===64){this.report('disco',shown+' disco mode (maintenance; logged, not applied)');return;}
+      if(payload.includes(47)){this.report('game',shown+' game command (format not confirmed; logged, not applied)');return;}
+      if(payload.length<2||payload.some(b=>b<48||b>57)){this.report('single',shown+' not understood (expected *<role><id>., *@. or a game *a/b/….); ignored');return;}
+      const role=payload[0]-48,index=Number(String.fromCharCode(...payload.slice(1)));
+      if(role>=SHINY_EDITOR.length){this.report('unknown-code',shown+' role '+role+' unknown (0 off, 1 start, 2 hand, 3 foot, 4 top); ignored');return;}
+      if(index>=this.holdCount){this.report('invalid',shown+' hold '+index+' is beyond the wall (holds 0..'+(this.holdCount-1)+'); ignored');return;}
+      const wall=Object.assign({},this.shared.state),code=SHINY_EDITOR[role];
+      if(code)wall[index]=code;else delete wall[index];
+      this.report('hold',shown+' hold '+index+' -> '+(SHINY_ROLE_NAMES[code]||'off')+'; '+Object.keys(wall).length+' lit');
+      this.publish(wall);
     }
     vector(payload) {
       const codes=[],invalid=[],unknown=[];

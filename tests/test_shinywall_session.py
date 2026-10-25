@@ -205,7 +205,7 @@ class TestWritePath:
         for chunk in route_writes(ROUTE, 311):
             session.feed(chunk)
         assert session.state.get_holds() == {}
-        assert "LENGTH vector has 311 codes, this wall has 475 holds" in caplog.text
+        assert "LENGTH vector has 311 codes, this wall has 476 holds" in caplog.text
         assert "REJECT strict length" in caplog.text
 
     def test_session_logs_before_renderers_see_the_state(self, caplog) -> None:
@@ -322,7 +322,10 @@ class TestAdvertisingData:
 
 
 class TestGeometry:
-    def test_placeholder_is_index_order_on_the_grid(self) -> None:
+    def test_placeholder_is_index_order_on_the_grid(self, monkeypatch) -> None:
+        import shinywall_geometry
+
+        monkeypatch.setattr(shinywall_geometry, "DEFAULT_GEOMETRY_PATH", "/nonexistent")
         variant = board_for("shinywall").variant_for("st1")
         geometry = ShinyWallGeometry(variant)
         assert geometry.is_placeholder and "placeholder" in geometry.source
@@ -381,7 +384,37 @@ class TestGeometry:
         with pytest.raises(ValueError, match="not a"):
             ShinyWallGeometry(variant, path=str(path))
 
-    def test_headless_grid(self) -> None:
+    def test_bundled_geometry_is_the_default(self) -> None:
+        for variant in board_for("shinywall").variants:
+            geometry = ShinyWallGeometry(variant)
+            assert not geometry.is_placeholder, variant.key
+            # Registry, CruxCoach and the table agree on the vector length.
+            assert geometry.hold_count == variant.hold_count, variant.key
+        st1 = ShinyWallGeometry(board_for("shinywall").variant_for("st1"))
+        assert st1.absent == {220} and st1.hold(0).name == "a1"
+        st5 = ShinyWallGeometry(board_for("shinywall").variant_for("st5"))
+        assert st5.absent == {340, 464, 518}
+        # Index 0 is bottom left on the big-hold rows; tops are high.
+        assert st1.hold(0).x == min(h.x for h in st1.holds if h.y == st1.hold(0).y)
+
+    def test_hold_edit_on_an_absent_index_warns(self, caplog) -> None:
+        session = make()
+        caplog.set_level(logging.INFO)
+        session.feed(b"*2220.")
+        assert "HOLD *2220. hold 220 -> hand" in caplog.text
+        assert "ABSENT lit index(es) [220]" in caplog.text
+
+    def test_hold_edits_from_two_centrals_share_the_wall(self) -> None:
+        session = make()
+        char = wire(session)
+        write(char, encode_vector(state_vector(ROUTE, 311)), peer=PEER)
+        write(char, b"*4005.", peer="/org/bluez/hci0/dev_11_22_33_44_55_66")
+        assert session.state.get_holds() == {**ROUTE, 5: CODE_TOP}
+
+    def test_headless_grid(self, monkeypatch) -> None:
+        import shinywall_geometry
+
+        monkeypatch.setattr(shinywall_geometry, "DEFAULT_GEOMETRY_PATH", "/nonexistent")
         variant = board_for("shinywall").variant_for("st1")
         text = render_holds_text(ShinyWallGeometry(variant), {**ROUTE, 30: 5})
         lines = text.splitlines()

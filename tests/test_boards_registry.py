@@ -230,9 +230,9 @@ class TestShinyWallIdentity:
         assert table == {
             "st1": ("Standard", 311, 12, 35, "STP"),
             "st4": ("Standard Full", 401, 12, 35, "STF"),
-            "st2": ("Standard Max", 475, 18, 35, "STM"),
+            "st2": ("Standard Max", 476, 18, 35, "STM"),
             "st5": ("Standard Max Full", 611, 18, 35, "STMF"),
-            "st0": ("Standard Mini", 239, 12, 29, None),
+            "st0": ("Standard Mini", 249, 12, 29, None),
         }
         assert board.default_variant.key == "st1"
 
