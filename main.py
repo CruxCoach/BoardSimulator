@@ -143,7 +143,8 @@ def _parse_args() -> argparse.Namespace:
         help="Exact advertised name, e.g. 'ShinyWall_STP_ABC123' (at most "
              f"{config.SCAN_RESPONSE_NAME_LIMIT} bytes). Default: "
              "ShinyWall_<code>_0001 (STP st1, STF st4, STM st2, STMF st5), "
-             f"'{config.SHINYWALL_MINI_NAME}' for st0. Slot 1 only.")
+             f"'{config.SHINYWALL_MINI_NAME}' for st0. With --instances 2 "
+             "it names the first Shiny Wall; a second gets ShinyWall_<code>_0002.")
     shiny.add_argument(
         "--service-uuid", default=None, metavar="UUID",
         help="Service that holds the write characteristic "
@@ -161,9 +162,9 @@ def _parse_args() -> argparse.Namespace:
              "applies what fits and warns, 'strict' rejects it.")
     shiny.add_argument(
         "--shiny-codes", default=None, choices=("reject", "accept"),
-        help="Numeric codes other than 0/2/4/6/8: 'reject' (default) "
-             "leaves the hold off, 'accept' shows it as unknown. Non-numeric "
-             "tokens are always invalid.")
+        help="Digits other than 0/2/4/6/8 in a state vector: 'reject' "
+             "(default) leaves the hold off, 'accept' shows it as unknown. "
+             "A byte that is not a digit is always invalid.")
     shiny.add_argument(
         "--shiny-mtu", type=int, default=None, metavar="MTU",
         help="ATT MTU of the simulated controller: writes longer than "
@@ -310,9 +311,14 @@ def _shiny_options(args):
     return options, ["--" + flag.replace("_", "-") for flag in given]
 
 
-def _slot_shiny(shiny, slot: int):
-    """Options for a virtual-board slot: slot 2 gets its own default name."""
-    if slot == 0:
+def _slot_shiny(shiny, slot: int, first_is_shiny: bool = True):
+    """Options for a virtual-board slot.
+
+    The Shiny Wall options belong to the first Shiny Wall; a second one in
+    slot 2 gets its own default name (two walls with one name would make
+    the official app connect to either).
+    """
+    if slot == 0 or not first_is_shiny:
         return shiny
     from dataclasses import replace
 
@@ -320,6 +326,10 @@ def _slot_shiny(shiny, slot: int):
 
     base = shiny or ShinyWallOptions()
     return replace(base, name=None, identity=_next_serial(base.identity))
+
+
+def _is_shiny(sel) -> bool:
+    return board_for(sel.board_key).protocol == PROTOCOL_SHINYWALL
 
 
 def _build_session(sel, api_level, serial, controller=None,
@@ -563,7 +573,8 @@ def _run_gui(selection, second_selection, api_level, serial, second_serial,
         serials = [serial, second_serial]
         resolved = [
             _build_session(state["selections"][slot], api_level, serials[slot],
-                           controller, strict_pacing, _slot_shiny(shiny, slot))
+                           controller, strict_pacing,
+                           _slot_shiny(shiny, slot, _is_shiny(state["selections"][0])))
             for slot in range(count)
         ]
         sessions = [item[2] for item in resolved]
@@ -683,7 +694,7 @@ def main() -> int:
             args.strict_pacing, shiny)
         second_board, second_variant, second_session = _build_session(
             second_sel, args.api_level, second_serial, args.controller,
-            args.strict_pacing, _slot_shiny(shiny, 1))
+            args.strict_pacing, _slot_shiny(shiny, 1, _is_shiny(sel)))
     except (ValueError, OSError) as exc:
         logger.error("%s", exc)
         return 2

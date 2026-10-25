@@ -431,6 +431,8 @@ class TestCli:
         second = main._slot_shiny(options, 1)
         assert second.name is None and second.identity == "0002"
         assert main._slot_shiny(None, 0) is None
+        # Only slot 2 is a Shiny Wall: it keeps the given name.
+        assert main._slot_shiny(options, 1, first_is_shiny=False) is options
 
     def test_att_log_defaults_to_shiny(self) -> None:
         import main
