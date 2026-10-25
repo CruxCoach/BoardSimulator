@@ -188,6 +188,8 @@ final class Peripheral {
                 post(() -> {if(status==BluetoothGatt.GATT_SUCCESS)publishNext();else fail("GATT registration status "+status);});
             }
             @Override public void onConnectionStateChange(BluetoothDevice device,int status,int state) {
+                android.util.Log.i("BoardSimWire", "slot="+slot+" peer="+device.getAddress()+" state="+state+" status="+status
+                    +" at="+android.os.SystemClock.elapsedRealtime());
                 post(() -> {
                     if(state==BluetoothProfile.STATE_CONNECTED) {
                         if(!multiplexed && !multi && !links.isEmpty() && !links.containsKey(device)) {server.cancelConnection(device);return;}
@@ -210,6 +212,8 @@ final class Peripheral {
                 byte[] copy=value.clone();
                 // Arrival time for the pacing check, taken before the main-thread hop.
                 long at=android.os.SystemClock.elapsedRealtime();
+                android.util.Log.i("BoardSimWire", "slot="+slot+" peer="+d.getAddress()+" char="+c.getUuid()
+                    +" response="+response+" at="+at+" len="+copy.length+" hex="+hex(copy));
                 post(() -> {
                     int result=prepared?BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED:offset!=0?BluetoothGatt.GATT_INVALID_OFFSET:
                         !assign(d)?BluetoothGatt.GATT_FAILURE:BluetoothGatt.GATT_SUCCESS;
@@ -300,5 +304,10 @@ final class Peripheral {
         if(registered) {activity.unregisterReceiver(changes);registered=false;}
         server=null;links.clear();advertising=null;advertisingSet=null;advertisementEnabled=false;oldName=null;desiredName=null;
         services.clear();notifications.clear();notifying=false;inFlight=null;
+    }
+    private static String hex(byte[] b) {
+        StringBuilder out=new StringBuilder(b.length*2);
+        for(byte x:b) out.append(String.format(java.util.Locale.ROOT,"%02x",x&0xff));
+        return out.toString();
     }
 }

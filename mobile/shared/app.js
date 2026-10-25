@@ -12,6 +12,8 @@ function native(command,payload={}) {
   else log('No native BLE bridge: browser preview cannot advertise.');
 }
 function log(message) {
+  // Android: mirror every line into logcat (tag BoardSimUI) so a tester can follow a run over adb.
+  if(window.Native && window.Native.log) window.Native.log(message);
   lines.push(new Date().toISOString()+' '+message); if(lines.length>180) lines.shift();
   $('log').textContent=lines.join('\n');
 }

@@ -129,6 +129,8 @@ public final class MainActivity extends Activity {
         else status(pendingSlot,"Nearby devices permission denied. Grant it in Settings, then Start.", false);
     }
     private final class Bridge {
+        /** Mirrors the page log into logcat (tag BoardSimUI): `adb logcat -s BoardSimUI BoardSimWire`. */
+        @JavascriptInterface public void log(String line) { android.util.Log.i("BoardSimUI", line); }
         @JavascriptInterface public void postMessage(String raw) {
             runOnUiThread(() -> {
                 int slot=0;
