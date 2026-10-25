@@ -7,10 +7,11 @@ mobile code and distinguishes implementation from physical validation.
 
 | Feature | Current Linux | Android | iOS |
 |---|---|---|---|
-| Eight boards, all layouts/sizes | Registry, 52 configurations | Same generated registry | Same generated registry |
+| Nine boards, all layouts/sizes | Registry, 57 configurations | Same generated registry | Same generated registry |
 | Aurora API 2/3, board-local colors | Python decoder and role resolver | Shared conformance-tested decoder/palettes | Identical shared decoder/palettes |
 | MoonBoard, five variants | ASCII, split frames, clear, aux semantics | Same tested semantics/maps | Same tested semantics/maps |
 | Quantum XL/L/M/S/Belay | Binary 2.0.14/1.44, JSON, layers, roster | Same tested semantics, reads/targeted notifications | Same tested semantics, reads/targeted notifications |
+| Shiny Wall st1/st4/st2/st5/st0 | ASCII `-` / `+<digits>.`, every deviation logged, ATT sniffer, MTU/delay/strict/ack flags | Same tested decoder (conformance traces), exact name, optional UUID, `OK` notify, strict length; MTU/subscriptions in logcat | Same tested decoder and controls; Swift changes compile-checked only by CI |
 | Aurora serial identity | CLI serial | Editable 1–8 alphanumeric characters | Same control; advertising space limits remain |
 | Accurate images/coordinates | DBs, maps, calibrated Quantum transform | Byte-identical assets, exported transforms | Byte-identical assets, exported transforms |
 | Resizing/display | Tk, headless; multi panels | Responsive canvas per panel | Responsive canvas per panel |

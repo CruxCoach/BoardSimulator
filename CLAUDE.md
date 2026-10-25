@@ -9,12 +9,16 @@ the official apps and CruxCoach connect, write climb frames, and the
 simulator decodes and visualizes them — Tkinter GUI or headless ASCII
 grid.
 
-Two protocol families behind one session abstraction:
+Four protocol families behind one session abstraction:
 
 - **aurora** — Kilter, Tension, Grasshopper, Decoy, So iLL, Touchstone.
   Binary packets, placement/LED model, SQLite geometry.
 - **moonboard** — MoonBoard (5 variants). NUS-only GATT, ASCII frames,
   photo/coordinate-map rendering.
+- **quantum** — Quantum Board (fff2 CRC16/MODBUS commands).
+- **shinywall** — Shiny Wall (st1/st4/st2/st5/st0). One ESP32 write
+  characteristic, ASCII messages `-` / `+<digit per hold>.`, schematic
+  rendering by hold index (see "Shiny Wall specifics").
 
 This repo SUPERSEDES the three sibling simulators (`KilterSimulator`,
 `AuroraSimulator`, `MoonSimulator`) — those are read-only references
@@ -37,7 +41,9 @@ BoardSimulator/
 │   ├── session.py        # GattProfiles + AuroraSession/MoonSession factory
 │   ├── aurora_decoder.py # Aurora packet decoder (API level 2 + 3)
 │   ├── aurora_encoder.py # Reference encoder (BoardPacketEncoder port) + frames
-│   └── moonboard.py      # MoonBoard ASCII frame decoder + serpentine math
+│   ├── moonboard.py      # MoonBoard ASCII frame decoder + serpentine math
+│   ├── shinywall.py      # Shiny Wall decoder (byte state machine) + encoder
+│   └── shinywall_session.py # Shiny Wall session: write context, limits, logs
 ├── ble/
 │   ├── peripheral.py     # BlueZ D-Bus peripheral + preflight_check()
 │   ├── gatt.py           # GattProfile spec -> D-Bus GATT objects
@@ -164,6 +170,25 @@ Decode side: `leds JOIN holes` per `product_size_id` (layout-independent,
 like the physical controller). Encode side (tests/mock client):
 `placements JOIN leds ON hole_id` filtered by layout + size — the same
 join as CruxCoach's `getPlacementLedMap`.
+
+### Shiny Wall specifics
+
+Protocol source: the official app's BLE code (CruxCoach run folder,
+APP-BEHAVIOUR-REPORT / CONTRACTS §3); no wall or firmware exists to capture.
+The earlier draft `.c0+c1+….` was wrong — the vector is `+` + one digit per
+hold + `.`, after a separate `-`. `ble/gatt.py` sets a `CURRENT_WRITE`
+context var (type/MTU/offset/peer) around the write callback; the session
+reads it for its `RX …` lines. `ble/att_log.py` sniffs the HCI monitor
+channel (`--att-log`, default on for Shiny) because BlueZ answers MTU,
+discovery and requests for missing attributes without D-Bus. Firmware
+assumptions with a flag: lenient length, unknown codes, LEDs kept after
+disconnect, MTU, processing delay, "OK" notify. Without a flag: a partial
+message is kept across writes and `-` always clears (aborting it). The
+mobile `ShinyWall` decoder in `mobile/shared/protocols.js` must stay
+byte-identical in behaviour (conformance traces from `tools/mobile_fixtures.py`).
+Hold positions are a placeholder (index order on the grid) unless a
+`cruxcoach-shinywall-geometry-v1` file is given; the derived geometry file is
+not committed here.
 
 ### Decoder details
 

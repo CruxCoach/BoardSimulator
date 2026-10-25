@@ -1,6 +1,6 @@
 # BoardSimulator — Consolidated software BLE simulator for all CruxCoach boards
 
-Pure-software simulation of **all eight interactive board families** from
+Pure-software simulation of **all nine interactive boards** from
 CruxCoach via real Bluetooth Low Energy (BLE) peripherals. Linux, Android and
 iOS are developed in this repository; Linux uses the CLI/Tk interface and the
 mobile apps use native BLE with a shared offline board view:
@@ -15,6 +15,7 @@ mobile apps use native BLE with a shared offline board view:
 | **Touchstone** | Aurora | Winter 2020 | 1–4 |
 | **MoonBoard** | NUS/ASCII | 2016, Masters 2017, Masters 2019, 2024, Mini 2020 | Token-based |
 | **Quantum Board** | CRC16/MODBUS + legacy JSON | XL, L, M, S, Belay | Start / step / finish / route |
+| **Shiny Wall** | ASCII state vector (`-`, `+<digit per hold>.`) | Standard (st1), Full (st4), Max (st2), Max Full (st5), Mini (st0) | Codes 2 / 4 / 6 / 8 |
 
 The PC acts as a BLE peripheral via the local Bluetooth adapter (BlueZ)
 and accepts connections from the respective official app or from
@@ -159,6 +160,15 @@ sudo venv/bin/python main.py --board moonboard --layout mini-2020
 # Quantum XL with the original eWalls board image and diode overlay
 sudo venv/bin/python main.py --board quantum --layout xl
 
+# Shiny Wall Standard (st1) as "ShinyWall_STP_0001", every write logged
+sudo venv/bin/python main.py --board shinywall --headless
+
+# …with an exact name for the official app, no service UUID advertised,
+# "OK" notifications, and strict vector length
+sudo venv/bin/python main.py --board shinywall --layout st5 \
+    --name "ShinyWall_STMF_ABC123" --no-advertised-uuid --shiny-ack \
+    --shiny-length strict --headless
+
 # So iLL in headless mode
 sudo venv/bin/python main.py --board soill --headless
 
@@ -181,8 +191,8 @@ python main.py --list
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--board` | `kilter` | `kilter` `tension` `grasshopper` `decoy` `soill` `touchstone` `moonboard` `quantum` |
-| `--layout` | first layout | e.g. Kilter: `original` `homewall`; MoonBoard: `2016` … `mini-2020`; Quantum: `xl` `l` `m` `s` `belay` |
+| `--board` | `kilter` | `kilter` `tension` `grasshopper` `decoy` `soill` `touchstone` `moonboard` `quantum` `shinywall` |
+| `--layout` | first layout | e.g. Kilter: `original` `homewall`; MoonBoard: `2016` … `mini-2020`; Quantum: `xl` `l` `m` `s` `belay`; Shiny Wall: `st1` `st4` `st2` `st5` `st0` |
 | `--size` | layout default | Aurora `product_size_id` (see `--list`) — Aurora boards only |
 | `--api-level` | `3` | Aurora protocol version (`2` or `3`), suffix `@N` in the BLE name — Aurora boards only |
 | `--serial` | `0001` | Serial number, suffix `#serial` in the BLE name — Aurora boards only |
@@ -198,15 +208,35 @@ python main.py --list
 | `--window-height` | `750` (`520` per board with two) | Board height the GUI window opens with — the window is resizable regardless |
 | `--fullscreen` | off | Open the GUI in fullscreen (F11 toggles, Escape leaves) |
 | `--headless` | off | ASCII grid on stdout instead of GUI (also: `BOARDSIM_HEADLESS=1`) |
+| `--att-log` / `--no-att-log` | on for the Shiny Wall | Log every ATT PDU and link event from the HCI monitor channel: MTU exchange, discovery, reads, subscriptions, errors — also for attributes the simulator does not offer |
 
-Aurora-specific options on the MoonBoard or Quantum abort with a clear error
-message — as does a start without a BlueZ/Bluetooth adapter
+Shiny Wall only (each aborts with an error on other boards):
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--name` | `ShinyWall_<code>_0001` | Exact advertised name, at most 29 bytes (more fails at startup). Codes: `STP` st1, `STF` st4, `STM` st2, `STMF` st5; st0 advertises `Shiny Wall ST0 (ShinyMini)` |
+| `--service-uuid` | `4fafc201-1fb5-459e-8fcc-c5c9c331914b` | Service holding the write characteristic `beb5483e-36e1-4688-b7f5-ea07361b26a8` |
+| `--no-advertised-uuid` | off | Advertise flags + name only |
+| `--shiny-holds` | variant | Holds in a state vector (st1 311, st4 401, st2 475, st5 611, st0 239 — provisional) |
+| `--shiny-length` | `lenient` | Wrong vector length: `lenient` applies what fits and warns, `strict` rejects it |
+| `--shiny-codes` | `reject` | Digits other than 0/2/4/6/8: `reject` leaves the hold off, `accept` shows it as unknown |
+| `--shiny-mtu` | – | ATT MTU of the simulated controller; longer writes are dropped (pair with `ExchangeMTU`, see below) |
+| `--shiny-delay` | `0` | Processing delay per write in ms (blocks the BLE loop, delays the write response) |
+| `--shiny-on-disconnect` | `keep` | LEDs when the last central leaves: `keep` or `clear` |
+| `--shiny-props` | `read,write,write-without-response,notify` | Properties of the write characteristic |
+| `--shiny-ack` | off | Notify `OK` after every understood message (the official app waits for it in traverses) |
+| `--shiny-notify-uuid` | – | Extra notify-only characteristic; `--shiny-ack` then notifies there |
+| `--shiny-geometry` | `data/shinywall_geometry_v1.json` if present | Hold positions (`cruxcoach-shinywall-geometry-v1`); otherwise index order on the grid |
+
+Aurora-specific options on the MoonBoard, Quantum or Shiny Wall abort with a
+clear error message — as does a start without a BlueZ/Bluetooth adapter
 (**fail-fast** instead of silently hanging).
 
 After starting:
 1. The BLE peripheral advertises — Aurora boards as
    `<BoardName>#<serial>@<apiLevel>` (e.g. `Kilter Board#0001@3`),
-   the MoonBoard as the bare `MoonBoard`
+   the MoonBoard as the bare `MoonBoard`, a Shiny Wall as
+   `ShinyWall_<code>_<id>`
 2. The official app or CruxCoach can connect
 3. Climbs that are sent are visualized live — with the **board's own**
    role colors (Kilter e.g. middle=cyan/finish=magenta, So iLL
@@ -298,12 +328,16 @@ pip install bleak   # only needed for the mock client
 python tests/test_ble_mock_client.py kilter      # or tension, moonboard, ...
 python tests/test_ble_mock_client.py quantum
 python tests/test_ble_mock_client.py kilter --kilter-built   # bare name, API 2, paced
+python tests/test_ble_mock_client.py shinywall --layout st1  # like the official app
+python tests/test_ble_mock_client.py shinywall --name ShinyWall_STP_ABC123 --command
 ```
 
 The test client scans using the same naming rules as CruxCoach, connects
 and sends a sample climb — for Aurora boards three holds in the
 respective board's colors, for the MoonBoard an ASCII frame like the one
-from CruxCoach's `MoonBoardFrameEncoder`.
+from CruxCoach's `MoonBoardFrameEncoder`, for the Shiny Wall `-` and a state
+vector paced like the official app (100 ms before a message, 50 ms between
+its chunks of MTU − 5 bytes).
 
 ### Unit tests
 
@@ -317,23 +351,27 @@ venv/bin/python -m pytest tests/ -q
 
 ```
 main.py                 CLI → Session → BLE peripheral + renderer
-boards.py               Registry: 8 boards, 3 protocol families
+boards.py               Registry: 9 boards, 4 protocol families
 protocols/
   session.py            Family wiring: GATT profile, decoder, state
   aurora_decoder.py     Aurora binary protocol (API level 2 + 3)
   aurora_encoder.py     Reference encoder (CruxCoach BoardPacketEncoder port)
   moonboard.py          MoonBoard ASCII frames (NUS)
   quantum.py            Quantum CRC16/MODBUS + legacy JSON
+  shinywall.py          Shiny Wall ASCII messages (decoder + reference encoder)
+  shinywall_session.py  Shiny Wall session: write context, limits, logging
 ble/
   adapter.py            Adapter name → D-Bus path, match rule, hcitool -i
   peripheral.py         BlueZ D-Bus peripheral + fail-fast preflight
   multiplex.py          Two simultaneous hardware identities on one controller
   hci_monitor.py        Advertising-handle → connection event mapping
+  att_log.py            ATT/link log from the HCI monitor channel (--att-log)
   gatt.py               GATT profile → D-Bus objects
   advertising.py        Extended-Advertising HCI helpers
 render/                 GUI + headless per family
 board_geometry.py       LED↔hole coordinates, edges, roles (SQLite)
 quantum_geometry.py     Quantum address/coordinate lookup
+shinywall_geometry.py   Shiny Wall hold positions (geometry file or index order)
 board_state.py          Thread-safe board state per family
 role_colors.py          Wire color → board-local role
 data/<brand>.sqlite3    Trimmed official board DBs
@@ -436,6 +474,42 @@ There is no physical Quantum hardware capture in the repository, so exact
 firmware responses and timing are deliberately not claimed. The evidence and
 remaining boundaries are documented in [the Quantum E2E guide](docs/quantum-e2e.md).
 
+### Shiny Wall
+
+The controller is an ESP32. It exposes one characteristic,
+`beb5483e-36e1-4688-b7f5-ea07361b26a8`, which the official app looks up across
+all services (the simulator puts it in the ESP32 example's service
+`4fafc201-…`). Standard walls advertise `ShinyWall_<code>_<id>` (`STP` Standard
+st1, `STF` Full st4, `STM` Max st2, `STMF` Max Full st5), the Mini
+`Shiny Wall ST0 (ShinyMini)`.
+
+Messages are ASCII and follow `<command><payload>.`, split into writes of
+MTU − 5 bytes:
+
+| Message | Meaning | Simulator |
+|---------|---------|-----------|
+| `-` | Clear the wall (no dot) | applied |
+| `+<d0><d1>…<dN>.` | One digit per hold 0…hold count − 1: 0 off, 2 start, 4 hand, 6 foot, 8 top | applied |
+| `*<x>.` | Single hold / game command | logged |
+| `f<n>.` | Init foot LEDs, sent once after connecting when the wall has it set | logged |
+| anything else | Unknown command; the old draft `.c0+c1+….` is reported as such | logged |
+
+The official app (from its BLE code; no wall and no firmware were available)
+writes with response, sends `-` first, waits 100 ms before each message and
+50 ms between its chunks, and asks for MTU 512 after connecting. It waits for
+an `OK` notification on the same characteristic only in traverses
+(`--shiny-ack`). The simulator's defaults are assumptions where the firmware
+is unknown: it keeps a partial message across writes, `-` always clears, a
+wrong vector length is applied as far as it fits, and LEDs stay lit after a
+disconnect. Each of these has a flag to test the stricter behaviour.
+
+Hold counts (st1 311, st4 401, st2 475, st5 611, st0 239) are the catalogue's
+highest hold numbers plus one, as in CruxCoach. The official app sends as
+many digits as the wall's hold list in its backend spans, so a `LENGTH` line
+in the log shows the real count of that wall. Positions: without a geometry
+file the simulator draws the holds in index order on the variant's grid
+(12×35, 18×35, Mini 12×29) and says so in the legend.
+
 ### Roles & colors (board-local!)
 
 | Board | start | middle | finish | foot |
@@ -447,7 +521,8 @@ remaining boundaries are documented in [the Quantum E2E guide](docs/quantum-e2e.
 The simulator resolves decoded colors back to the role via the board's
 own palette (GUI: screen color of the role, headless: role letter).
 MoonBoard role colors come from the token (start=green, hand=blue,
-finish=red, foot=cyan, …).
+finish=red, foot=cyan, …). The Shiny Wall's codes are drawn as start green,
+hand blue, foot yellow, top red (the simulator's own neutral colours).
 
 ## Data provenance
 
@@ -471,6 +546,82 @@ that app's renderer. Catalog types are XL=`big`, L=`medium`, M=`small`, S
 Fitness=`xsmall` and Belay=`belay`. The image/coordinate contract is verified;
 physical controller timing and wiring remain `hardware_verified=false`.
 
+## Testing with the official Shiny Wall app
+
+Goal: prove the simulator speaks the controller's protocol by letting the
+official Shiny Wall app (Android) drive it, then check CruxCoach against the
+same simulator. As far as its code shows, the official app needs:
+
+- **a wall selected in the app** (it connects to that wall's controller and
+  sends what the wall's hold list says), so most likely an account. Pick a
+  Standard wall of the variant you simulate.
+- **a matching name.** The app scans without a filter, waits about 1 s and
+  connects to the first device whose name *contains* the controller name
+  stored for that wall; when the wall has none stored it looks for
+  `ShinyWall_`. So either set `--name` to the stored name (or any name that
+  contains it), or leave the default `ShinyWall_<code>_0001`. Keep other
+  Shiny Wall controllers and simulators out of range — the app takes the
+  first match.
+- no service UUID filter. Pairing is not expected; if the app asks for it,
+  the ATT log shows `SMP … pairing request`. Grant the app's Bluetooth (and,
+  on older Android, location) permissions.
+
+### Linux
+
+```bash
+sudo venv/bin/python main.py --board shinywall --layout st1 \
+    --name "ShinyWall_STP_ABC123" --headless 2>&1 | tee shiny-official.log
+# variants of the same test:
+#   --layout st4|st2|st5|st0          the wall's variant
+#   --shiny-holds 476                 the count the LENGTH line reported
+#   --no-advertised-uuid              advertise flags + name only
+#   --service-uuid <uuid>             another service for the characteristic
+#   --shiny-ack                       answer "OK" (traverses)
+```
+
+BlueZ negotiates the MTU itself (`/etc/bluetooth/main.conf`, `[GATT]`
+`ExchangeMTU`, default 517). To see how the app behaves at a small MTU, set
+`ExchangeMTU = 23`, restart bluetooth and start with `--shiny-mtu 23`.
+
+### Android (BoardSimulator app)
+
+Install the `boardsimulator-android-debug` APK on a second phone (the one
+running the official app cannot also be the wall). Choose **Board: Shiny Wall**,
+the layout, type the name into **Advertised name**, optionally untick
+**Advertise service UUID** or tick **Reply OK**, then **Start BLE**. Keep the
+app in front. Follow the log on a computer with
+
+```bash
+adb logcat -s BoardSimUI BoardSimWire
+```
+
+### What to check, and the log lines that show it
+
+1. The app connects: `LINK <address> connected …` and `Central <address>
+   connected` (Linux), `Connected · <address>` (Android).
+2. MTU: `MTU request 512` / `ATT MTU now …` (Linux ATT log), `MTU …`
+   (Android).
+3. Discovery and any read or subscription it does: `discover services`,
+   `READ …`, `SUBSCRIBE notify on beb5483e-…` (Linux), `Subscribed · …`
+   (Android). Requests for attributes the simulator lacks show as
+   `ERROR for …` warnings.
+4. Optional `f<n>.` right after connecting: `FOOT init foot LEDs …`.
+5. Send a route from the app: `RX 1 B (#…, request, …): '-'`, `CLEAR`, then
+   the vector in writes of MTU − 5 bytes about 50 ms apart and
+   `STATE <n> codes applied — start … hand … foot … top …`. The holds light
+   in the window (index numbers on each ring). A `LENGTH` warning means the
+   wall in the app has another hold count — note it, restart with
+   `--shiny-holds`.
+6. Clear / leave the route: `CLEAR`. Single holds or games: `SINGLE …`.
+7. Disconnect: `LINK … disconnected (reason …)`, `Link ended: … stay lit`.
+
+Any `GARBAGE`, `LEGACY`, `COMMAND`, `INVALID`, `UNKNOWN-CODE` or `ABORT`
+line is a finding: it names the bytes that did not fit the protocol.
+
+Then run CruxCoach against the same simulator: its scanner lists
+`ShinyWall_STP_…` as a Shiny Wall; sending a route must produce the same
+`CLEAR` + `STATE` lines with the route's holds.
+
 ## Troubleshooting
 
 ### "Bluetooth unavailable" at startup
@@ -486,6 +637,11 @@ The fail-fast preflight did not find BlueZ or the requested adapter:
 - BlueZ `Experimental = true` set and the service restarted?
 - `hcitool` installed? (part of `bluez` — needed for the advertising
   rewrite)
+
+### The Shiny Wall log shows `LENGTH`
+The app's vector has another length than the simulated variant. The official
+app sends one digit per hold of the selected wall's hold list: start with
+`--shiny-holds <n>` (n = the count in the warning) or the matching `--layout`.
 
 ### Connection drops after the first climb
 Normal on some Android versions — the simulator restarts advertising
