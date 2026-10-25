@@ -109,12 +109,29 @@ class TestStreams:
         accepted, _, _ = replay(stream, size, codes_mode=CODES_ACCEPT)
         assert accepted == [{**ROUTE, 10: 5, 11: 9}]
 
-    def test_foot_disco_and_game_commands_are_logged_only(self, size) -> None:
+    def test_foot_and_disco_are_logged_and_a_broken_change_is_ignored(self, size) -> None:
         stream = b"f3." + b"*12/4." + b"*@." + route(ROUTE)
         states, kinds, events = replay(stream, size)
         assert states == [ROUTE]
         assert kinds == ["foot", "game", "disco", "state"]
         assert "f3." in events[0].detail and "*12/4." in events[1].detail
+
+    def test_change_messages_update_several_holds_and_keep_the_rest(self, size) -> None:
+        stream = route(ROUTE) + b"*25/310/4123." + b"*05/0123."
+        states, kinds, events = replay(stream, size)
+        assert kinds == ["state", "game", "game"]
+        after = {**ROUTE, 5: CODE_HAND, 10: CODE_FOOT, 123: CODE_TOP}
+        assert states[1] == after
+        final = dict(after)
+        final.pop(5)
+        final.pop(123)
+        assert states[2] == final
+
+    def test_change_message_with_a_bad_part_changes_nothing(self, size) -> None:
+        stream = route(ROUTE) + b"*25/9999." + b"*25/71."
+        states, kinds, _ = replay(stream, size)
+        assert states == [ROUTE]
+        assert kinds == ["state", "invalid", "invalid"]
 
     def test_single_hold_edits_change_the_current_wall(self, size) -> None:
         stream = route(ROUTE) + b"*1123." + b"*0040." + b"*4005." + b"*2001."

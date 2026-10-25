@@ -92,6 +92,8 @@ def shiny_writes(holds: int) -> list[bytes | None]:
                vector, b"*1" + str(holds - 1).encode() + b".",       # route editor
                b"*0" + str(holds // 4).encode() + b".*3", b"7.*9 1.", # split, off, bad
                b"*51.*1" + str(holds).encode() + b".*@.*3/5/7.*x.",  # unknown role, range
+               b"*25/3" + str(holds // 3).encode() + b"/0" + str(holds // 4).encode() + b".",  # changes
+               b"*25/71.",                                            # change with a bad part
                b"-"]
     return writes
 

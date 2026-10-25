@@ -158,7 +158,7 @@
     single(payload) {
       const shown='*'+ascii(payload)+'.';
       if(payload.length===1&&payload[0]===64){this.report('disco',shown+' disco mode (maintenance; logged, not applied)');return;}
-      if(payload.includes(47)){this.report('game',shown+' game command (format not confirmed; logged, not applied)');return;}
+      if(payload.includes(47)){this.changes(shown,payload);return;}
       if(payload.length<2||payload.some(b=>b<48||b>57)){this.report('single',shown+' not understood (expected *<role><id>., *@. or a game *a/b/….); ignored');return;}
       const role=payload[0]-48,index=Number(String.fromCharCode(...payload.slice(1)));
       if(role>=SHINY_EDITOR.length){this.report('unknown-code',shown+' role '+role+' unknown (0 off, 1 start, 2 hand, 3 foot, 4 top); ignored');return;}
@@ -166,6 +166,19 @@
       const wall=Object.assign({},this.shared.state),code=SHINY_EDITOR[role];
       if(code)wall[index]=code;else delete wall[index];
       this.report('hold',shown+' hold '+index+' -> '+(SHINY_ROLE_NAMES[code]||'off')+'; '+Object.keys(wall).length+' lit');
+      this.publish(wall);
+    }
+    changes(shown,payload) {
+      const parts=String.fromCharCode(...payload).split('/'),changes={};
+      for(const part of parts){
+        if(part.length<2||!/^[0-9]+$/.test(part)){this.report('game',shown+" part '"+part+"' not understood (expected <role><id>); message ignored");return;}
+        const role=part.charCodeAt(0)-48,index=Number(part.slice(1));
+        if(role>=SHINY_EDITOR.length||index>=this.holdCount){this.report('invalid',shown+' part '+part+' has an unknown role or a hold beyond 0..'+(this.holdCount-1)+'; message ignored');return;}
+        changes[index]=SHINY_EDITOR[role];
+      }
+      const wall=Object.assign({},this.shared.state);
+      for(const [index,code] of Object.entries(changes)){if(code)wall[index]=code;else delete wall[index];}
+      this.report('game',shown+' '+Object.keys(changes).length+' hold(s) changed; '+Object.keys(wall).length+' lit');
       this.publish(wall);
     }
     vector(payload) {

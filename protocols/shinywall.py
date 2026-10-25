@@ -440,8 +440,7 @@ class ShinyWallProtocol:
                        "not applied)")
             return
         if b"/" in payload:
-            self._emit(EV_GAME, f"{shown} game command (format not confirmed; "
-                       "logged, not applied)")
+            self._changes(shown, payload.split(b"/"))
             return
         if len(payload) < 2 or not payload.isdigit():
             self._emit(EV_SINGLE, f"{shown} not understood (expected "
@@ -465,6 +464,35 @@ class ShinyWallProtocol:
         self._emit(EV_HOLD, f"{shown} hold {index} -> "
                    f"{ROLE_NAMES.get(code, 'off')}; {len(wall)} lit",
                    (index,) if code else ())
+        self._publish(wall)
+
+
+    def _changes(self, shown: str, parts: list[bytes]) -> None:
+        """``*<role><id>/<role><id>/….``: several holds at once, the rest of
+        the wall unchanged (the official app's games; CruxCoach's editor and
+        games). Applied only when every part is valid."""
+        changes: dict[int, int] = {}
+        for part in parts:
+            if len(part) < 2 or not part.isdigit():
+                self._emit(EV_GAME, f"{shown} part '{part.decode('ascii', 'replace')}' "
+                           "not understood (expected <role><id>); message ignored")
+                return
+            role, index = part[0] - 0x30, int(part[1:])
+            if role not in EDITOR_ROLES or index >= self.hold_count:
+                self._emit(EV_INVALID, f"{shown} part {part.decode()} has an unknown "
+                           f"role or a hold beyond 0..{self.hold_count - 1}; message "
+                           "ignored", (index,))
+                return
+            changes[index] = EDITOR_ROLES[role]
+        wall = dict(self._current())
+        for index, code in changes.items():
+            if code:
+                wall[index] = code
+            else:
+                wall.pop(index, None)
+        lit = sorted(i for i, c in changes.items() if c)
+        self._emit(EV_GAME, f"{shown} {len(changes)} hold(s) changed; "
+                   f"{len(wall)} lit — {summarize(wall)}", tuple(lit))
         self._publish(wall)
 
 
