@@ -15,6 +15,8 @@ Three protocol families:
   frames ``l#<token><pos>,…#``, advertised name is the bare "MoonBoard".
 - Quantum: characteristic-based fff2 writes, CRC16/MODBUS frames and an
   independently selected XL/L/M/S/Belay image.
+- Shiny Wall: one ESP32-style write characteristic, ASCII state vectors
+  ``.c0+c1+…+cN.`` (one role code per physical hold), ``-`` clears.
 """
 
 import os
@@ -101,6 +103,69 @@ def quantum_ble_name(model_key: str, identity: str = "020000000001") -> str:
     """Build the current eWalls scanner name; fff5 identifies the model."""
     prefix = "QBB" if model_key.lower() == "belay" else "QB"
     return f"{prefix}_{identity}"
+
+
+# ── Shiny Wall ───────────────────────────────────────────────────────────
+
+# The controller is an ESP32. Its write characteristic is the one from the
+# ESP32 Arduino BLE server example; the official app looks it up across all
+# services, so the service UUID is not part of the contract. The simulator
+# uses the example's service UUID by default (--service-uuid overrides it).
+SHINYWALL_SERVICE_UUID: str = "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+SHINYWALL_WRITE_UUID: str = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+SHINYWALL_DEFAULT_IDENTITY: str = "0001"
+# The Mini advertises one fixed name instead of ShinyWall_<code>_<id>.
+SHINYWALL_MINI_NAME: str = "Shiny Wall ST0 (ShinyMini)"
+# Characteristic properties the simulator offers by default: the example's
+# read + write, write-without-response so either write type lands, and
+# notify, which the official app subscribes to when it waits for an "OK"
+# (traverses); the "OK" itself is only sent with --shiny-ack.
+SHINYWALL_DEFAULT_PROPS: tuple[str, ...] = (
+    "read", "write", "write-without-response", "notify")
+SHINYWALL_ALLOWED_PROPS: tuple[str, ...] = (
+    "read", "write", "write-without-response", "notify", "indicate")
+
+# A legacy scan response holds 31 bytes; the Complete Local Name AD
+# structure spends 2 of them on its header.
+SCAN_RESPONSE_NAME_LIMIT: int = 29
+
+
+def check_ble_name(name: str) -> str:
+    """Return ``name`` or raise ValueError when it cannot be advertised.
+
+    The name travels in a legacy scan response, so more than 29 UTF-8
+    bytes cannot be sent at all; an empty name would not be found.
+    """
+    size = len(name.encode("utf-8"))
+    if not name:
+        raise ValueError("the BLE name must not be empty")
+    if size > SCAN_RESPONSE_NAME_LIMIT:
+        raise ValueError(
+            f"BLE name {name!r} is {size} bytes; a scan response carries at "
+            f"most {SCAN_RESPONSE_NAME_LIMIT}")
+    return name
+
+
+def shinywall_ble_name(name_code: str | None,
+                       identity: str = SHINYWALL_DEFAULT_IDENTITY) -> str:
+    """Name a Shiny Wall controller advertises: ``ShinyWall_<code>_<id>``.
+
+    ``name_code`` is the variant's code (``STP``, ``STF``, ``STM``,
+    ``STMF``); ``None`` means the Mini, which advertises a fixed name.
+    """
+    if name_code is None:
+        return SHINYWALL_MINI_NAME
+    return check_ble_name(f"ShinyWall_{name_code}_{identity}")
+
+
+def normalize_uuid(value: str) -> str:
+    """Canonical lower-case 128-bit UUID string, or ValueError."""
+    import uuid
+
+    try:
+        return str(uuid.UUID(value.strip()))
+    except (ValueError, AttributeError) as exc:
+        raise ValueError(f"not a UUID: {value!r}") from exc
 
 
 # ── Runtime ──────────────────────────────────────────────────────────────

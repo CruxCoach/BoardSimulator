@@ -80,6 +80,8 @@ class GattUpdate:
 
     notification: bytes | None = None
     read_value: bytes | None = None
+    # Characteristic to notify; None = the profile's first notify-capable one.
+    notify_uuid: str | None = None
 
 
 class WriteGuard:
@@ -385,7 +387,10 @@ class GattApplication(ServiceInterface):
             if update.read_value is not None:
                 self.set_first_read_value(update.read_value)
             if update.notification is not None:
-                self.notify_first(update.notification)
+                if update.notify_uuid:
+                    self.notify(update.notify_uuid, update.notification)
+                else:
+                    self.notify_first(update.notification)
             return
         value = bytes(update)
         if len(value) > 1 and not value[1] & 0x80:

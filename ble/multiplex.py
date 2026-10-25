@@ -229,8 +229,9 @@ class MultiplexedBLEPeripheral:
             if reply.read_value is not None and read_uuid is not None:
                 self._slot_read_values[slot][read_uuid.lower()] = reply.read_value
                 self._app.set_read_value(read_uuid, reply.read_value)
-            if reply.notification is not None and notify_uuid is not None:
-                self._notify_slot(notify_uuid, reply.notification)
+            target = reply.notify_uuid or notify_uuid
+            if reply.notification is not None and target is not None:
+                self._notify_slot(target, reply.notification)
             return
         value = bytes(reply)
         if (len(value) > 1 and not value[1] & 0x80 and

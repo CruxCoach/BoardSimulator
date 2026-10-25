@@ -2,11 +2,18 @@
 """BLE mock client that connects to a running simulator and sends a climb.
 
 Usage: python tests/test_ble_mock_client.py [board-key] [--kilter-built]
+       python tests/test_ble_mock_client.py shinywall [--layout st1]
+              [--name NAME] [--command]
        (board-key: kilter | tension | grasshopper | decoy | soill |
-        touchstone | moonboard | quantum, default kilter; must match the running
-        simulator's --board. --kilter-built matches a simulator started with
-        --controller kilter-built: bare name, API level 2, and it writes like
-        the Kilter app — with response, 100 ms apart)
+        touchstone | moonboard | quantum | shinywall, default kilter; must
+        match the running simulator's --board. --kilter-built matches a
+        simulator started with --controller kilter-built: bare name, API
+        level 2, and it writes like the Kilter app — with response, 100 ms
+        apart. Shiny Wall: --layout must match the simulator's variant,
+        --name picks one exact advertised name, --command writes without
+        response; the route goes out like the official app sends it: '-',
+        then '+' and one digit per hold and '.', each message in
+        max(MTU - 5, 18)-byte writes, 100 ms before the first, 50 ms apart)
 
 Requires the simulator (main.py) to be running first. Uses bleak as a
 BLE central to scan (matching exactly like CruxCoach's BoardBleScanner),
@@ -16,6 +23,8 @@ connect and write a climb to the UART RX characteristic:
   encoded via the BoardPacketEncoder port.
 - MoonBoard: an ASCII climb frame as CruxCoach's MoonBoardFrameEncoder
   emits it.
+- Shiny Wall: '-' and a full state vector (start/hand/foot/top), the
+  characteristic looked up across all services.
 
 Note: this is a manual integration helper, not a pytest test — it needs
 a live BLE adapter and a running simulator. pytest collects nothing here
@@ -29,8 +38,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from boards import (PROTOCOL_AURORA, PROTOCOL_MOONBOARD,
-                    PROTOCOL_QUANTUM, board_for)  # noqa: E402
+from boards import (PROTOCOL_AURORA, PROTOCOL_MOONBOARD,  # noqa: E402
+                    PROTOCOL_QUANTUM, PROTOCOL_SHINYWALL, board_for)
 
 UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 RX_CHARACTERISTIC_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
@@ -92,6 +101,63 @@ def build_chunks(board_key: str, kilter_built: bool = False) -> list[bytes]:
             for i in range(0, len(MOON_SAMPLE_FRAME), 20)]
 
 
+def shiny_sample_route(hold_count: int) -> dict[int, int]:
+    """Two starts, two hands, a foot and a top spread over the wall."""
+    from protocols.shinywall import CODE_FOOT, CODE_HAND, CODE_START, CODE_TOP
+
+    return {0: CODE_START, 1: CODE_START, hold_count // 4: CODE_HAND,
+            hold_count // 2: CODE_HAND, hold_count // 8: CODE_FOOT,
+            hold_count - 11: CODE_TOP}
+
+
+def shiny_name_matches(name: str, wanted: str | None) -> bool:
+    """CruxCoach's ShinyWallName rules, or one exact name."""
+    import re
+
+    if wanted:
+        return name == wanted
+    match = re.match(r"^ShinyWall_([A-Z0-9]+)_(\S+)$", name)
+    if match:
+        return match.group(1).startswith("ST")
+    return re.match(r"^Shiny Wall (ST\d)\b", name) is not None
+
+
+def _option(name: str) -> str | None:
+    argv = sys.argv[1:]
+    if name in argv and argv.index(name) + 1 < len(argv):
+        return argv[argv.index(name) + 1]
+    return None
+
+
+async def send_shiny(client, board, layout: str | None,
+                     with_response: bool) -> None:
+    """Find the write characteristic in any service and send one route."""
+    import config
+    from protocols.shinywall import (APP_CHUNK_GAP_MS, APP_FIRST_CHUNK_DELAY_MS,
+                                     chunks, encode_vector, state_vector)
+
+    variant = board.variant_for(layout)
+    char = next((c for service in client.services
+                 for c in service.characteristics
+                 if c.uuid.lower() == config.SHINYWALL_WRITE_UUID), None)
+    if char is None:
+        raise RuntimeError("write characteristic beb5483e-… not found")
+    mtu = getattr(client, "mtu_size", 23) or 23
+    route = shiny_sample_route(variant.hold_count)
+    messages = [b"-", encode_vector(state_vector(route, variant.hold_count))]
+    logger.info("Shiny Wall %s: characteristic in service %s, properties %s, "
+                "MTU %d -> writes of up to %d B, %s", variant.key,
+                char.service_uuid, char.properties, mtu, max(mtu - 5, 18),
+                "with response" if with_response else "without response")
+    logger.info("Route: %s", sorted(route.items()))
+    for message in messages:
+        await asyncio.sleep(APP_FIRST_CHUNK_DELAY_MS / 1000)
+        for index, chunk in enumerate(chunks(message, mtu)):
+            if index:
+                await asyncio.sleep(APP_CHUNK_GAP_MS / 1000)
+            await client.write_gatt_char(char, chunk, response=with_response)
+
+
 def cruxcoach_brand_prefix_match(name: str, prefix: str) -> bool:
     """CruxCoach's auroraBrandFromName normalisation: lowercase, strip
     spaces/hyphens, match the brand prefix."""
@@ -106,11 +172,15 @@ async def main() -> None:
         logger.error("bleak not installed — run: pip install bleak")
         sys.exit(1)
 
-    args = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
+    valued = {_option("--layout"), _option("--name")} - {None}
+    args = [arg for arg in sys.argv[1:]
+            if not arg.startswith("--") and arg not in valued]
     kilter_built = "--kilter-built" in sys.argv[1:]
     board_key = args[0] if args else "kilter"
     board = board_for(board_key)
-    chunks = build_chunks(board_key, kilter_built)
+    shiny_name = _option("--name")
+    chunks = ([] if board.protocol == PROTOCOL_SHINYWALL
+              else build_chunks(board_key, kilter_built))
 
     logger.info("Scanning for a fake %s...", board.display_name)
 
@@ -125,6 +195,8 @@ async def main() -> None:
             return cruxcoach_brand_prefix_match(name, board.cruxcoach_prefix)
         if board.protocol == PROTOCOL_QUANTUM:
             return name.startswith(("QB_", "QBB_"))
+        if board.protocol == PROTOCOL_SHINYWALL:
+            return shiny_name_matches(name, shiny_name)
         # MoonBoard: bare "MoonBoard…" name prefix (CruxCoach
         # isMoonBoardName accepts both capitalisations).
         return name.startswith(("MoonBoard", "Moonboard"))
@@ -139,6 +211,14 @@ async def main() -> None:
 
     async with BleakClient(device) as client:
         logger.info("Connected to %s", device.name)
+
+        if board.protocol == PROTOCOL_SHINYWALL:
+            await send_shiny(client, board, _option("--layout"),
+                             with_response="--command" not in sys.argv[1:])
+            logger.info("Route sent — check the simulator log (STATE line).")
+            await asyncio.sleep(2.0)
+            logger.info("Disconnected.")
+            return
 
         if board.protocol == PROTOCOL_QUANTUM:
             identity = bytes(await client.read_gatt_char(QUANTUM_CONFIG_UUID))

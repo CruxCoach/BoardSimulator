@@ -7,6 +7,8 @@ registered observers; they differ only in the shape of a hold:
 - MoonBoard: keyed by (column, row) grid cell, value is
   (role_code, r, g, b) — the role travels in the ASCII token, not in a
   colour, so it is part of the state.
+- Shiny Wall: keyed by hold index, value is the controller code
+  (2 start, 4 hand, 6 foot, 8 top; anything else is an accepted unknown).
 """
 
 import logging
@@ -41,6 +43,8 @@ class QuantumLight:
 
 
 QuantumHoldMap = dict[int, QuantumLight]
+# Shiny Wall: hold index -> controller code (lit holds only)
+ShinyHoldMap = dict[int, int]
 
 
 class _BaseBoardState:
@@ -195,3 +199,15 @@ class QuantumBoardState(_BaseBoardState):
             })
         # REQUEST_USER_ROUTE_LIST is intentionally state-neutral.
         self._publish()
+
+
+class ShinyWallBoardState(_BaseBoardState):
+    """State of a Shiny Wall: lit hold indices and their controller codes.
+
+    Every clear and every state vector replaces the whole wall, like the
+    controller's full-state messages.
+    """
+
+    def update(self, holds) -> None:
+        """Replace the wall with ``holds`` (index -> code, or pairs)."""
+        self._replace({int(i): int(c) for i, c in dict(holds).items() if c})

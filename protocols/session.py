@@ -10,8 +10,9 @@ simulator:
 - renderer construction (GUI or headless) for its rendering model.
 
 main.py only ever talks to the :class:`Session` interface, so adding a
-third protocol family means adding a session class here and a registry
-entry in boards.py — the CLI and BLE layers stay untouched.
+protocol family means adding a session class (here, or in its own module
+like ``protocols.shinywall_session``) and a registry entry in boards.py —
+the CLI and BLE layers stay untouched.
 """
 
 from __future__ import annotations
@@ -21,7 +22,9 @@ import logging
 import config
 from ble.gatt import CharacteristicSpec, GattProfile, GattUpdate, ServiceSpec
 from board_state import AuroraBoardState, MoonBoardState, QuantumBoardState
-from boards import PROTOCOL_AURORA, PROTOCOL_MOONBOARD, PROTOCOL_QUANTUM, Board
+from boards import (PROTOCOL_AURORA, PROTOCOL_MOONBOARD, PROTOCOL_QUANTUM,
+                    PROTOCOL_SHINYWALL, Board)
+from protocols.shinywall import ShinyWallOptions
 
 logger = logging.getLogger(__name__)
 
@@ -375,14 +378,20 @@ class QuantumSession(Session):
 def create_session(board: Board, variant, size_id: int | None,
                    api_level: int | None, serial: str | None,
                    controller: str | None = None,
-                   strict_pacing: bool = False) -> Session:
+                   strict_pacing: bool = False,
+                   shiny: ShinyWallOptions | None = None) -> Session:
     """Build the right session for a board's protocol family.
 
     Aurora-only options (--size, --api-level, --serial, --controller,
-    --strict-pacing) raise on a MoonBoard or Quantum rather than being
-    silently ignored. A Kilter-built controller has no serial and speaks
+    --strict-pacing) raise on a MoonBoard, Quantum or Shiny Wall rather
+    than being silently ignored; Shiny Wall options (``shiny``) raise on
+    every other board. A Kilter-built controller has no serial and speaks
     API level 2 only, so --serial or --api-level 3 raise there too.
     """
+    if shiny is not None and board.protocol != PROTOCOL_SHINYWALL:
+        raise ValueError(
+            "Shiny Wall options (--name, --service-uuid, --no-advertised-uuid, "
+            f"--shiny-*) only apply to the Shiny Wall, not {board.display_name}")
     if board.protocol == PROTOCOL_AURORA:
         if size_id is None:
             size_id = variant.default_size_id
@@ -428,4 +437,16 @@ def create_session(board: Board, variant, size_id: int | None,
                 "boards, not Quantum"
             )
         return QuantumSession(board, variant)
+    if board.protocol == PROTOCOL_SHINYWALL:
+        rejected = [name for name, value in (
+            ("--size", size_id), ("--api-level", api_level),
+            ("--serial", serial), ("--controller", controller),
+            ("--strict-pacing", strict_pacing or None)) if value is not None]
+        if rejected:
+            raise ValueError(
+                f"{', '.join(rejected)} only applies to Aurora-protocol "
+                "boards, not the Shiny Wall"
+            )
+        from protocols.shinywall_session import ShinyWallSession
+        return ShinyWallSession(board, variant, shiny)
     raise ValueError(f"unknown protocol family '{board.protocol}'")

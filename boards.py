@@ -12,6 +12,8 @@ Three protocol families share this registry:
   directly, plain-ASCII climb frames, photo/coordinate-map rendering.
 - ``quantum`` — fff2 writes using CRC16/MODBUS binary commands (plus legacy
   JSON), with original eWalls images and model-specific diode coordinates.
+- ``shinywall`` — one ESP32 write characteristic taking ASCII state vectors
+  (one role code per physical hold); schematic rendering by hold index.
 
 Everything here is static identity data, RE-verified against the official
 brand apps (decompiled `BluetoothServiceKt` / `StdBluetoothService` and the
@@ -44,6 +46,7 @@ ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 PROTOCOL_AURORA = "aurora"
 PROTOCOL_MOONBOARD = "moonboard"
 PROTOCOL_QUANTUM = "quantum"
+PROTOCOL_SHINYWALL = "shinywall"
 
 
 @dataclass(frozen=True)
@@ -97,12 +100,31 @@ class QuantumVariant:
 
 
 @dataclass(frozen=True)
+class ShinyWallVariant:
+    """One Shiny Wall Standard variant (``st0`` … ``st5``).
+
+    Mirrors CruxCoach's ``ShinyWallVariant``. ``hold_count`` is the length of
+    a full state vector (the controller's ``realHoldsLength``); until the
+    official geometry is known it is the catalogue's highest hold number plus
+    one. ``name_code`` is the code in ``ShinyWall_<code>_<id>``; ``None``
+    means the Mini's fixed name.
+    """
+
+    key: str
+    display_name: str
+    hold_count: int
+    columns: int
+    rows: int
+    name_code: str | None
+
+
+@dataclass(frozen=True)
 class Board:
     """Static identity of one simulated board."""
 
     key: str
     display_name: str        # also the BLE advertising-name prefix
-    protocol: str            # PROTOCOL_AURORA | PROTOCOL_MOONBOARD | QUANTUM
+    protocol: str            # PROTOCOL_AURORA | MOONBOARD | QUANTUM | SHINYWALL
     official_filter: str     # official app's name filter (contains/prefix)
     cruxcoach_prefix: str    # CruxCoach's normalised brand prefix
     variants: tuple          # first entry = default layout/variant
@@ -266,6 +288,23 @@ BOARDS: dict[str, Board] = {
                            ("xsmall",), "board_s.jpg"),
             QuantumVariant("belay", "Quantum Belay Board", 8, 12, "belay",
                            ("belay",), "board_belay.jpg"),
+        ),
+    ),
+    # Variant codes, grids and hold counts mirror CruxCoach's
+    # ShinyWallVariant; st3 (Standard Mini Full) has no catalogue content
+    # and no confirmed layout, so it is not offered there either.
+    "shinywall": Board(
+        key="shinywall",
+        display_name="Shiny Wall",
+        protocol=PROTOCOL_SHINYWALL,
+        official_filter="ShinyWall",
+        cruxcoach_prefix="shinywall",
+        variants=(
+            ShinyWallVariant("st1", "Standard", 311, 12, 35, "STP"),
+            ShinyWallVariant("st4", "Standard Full", 401, 12, 35, "STF"),
+            ShinyWallVariant("st2", "Standard Max", 475, 18, 35, "STM"),
+            ShinyWallVariant("st5", "Standard Max Full", 611, 18, 35, "STMF"),
+            ShinyWallVariant("st0", "Standard Mini", 239, 12, 29, None),
         ),
     ),
 }

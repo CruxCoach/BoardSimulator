@@ -17,9 +17,11 @@ from boards import (
     PROTOCOL_AURORA,
     PROTOCOL_MOONBOARD,
     PROTOCOL_QUANTUM,
+    PROTOCOL_SHINYWALL,
     AuroraVariant,
     MoonVariant,
     QuantumVariant,
+    ShinyWallVariant,
     board_for,
 )
 
@@ -30,10 +32,10 @@ def cruxcoach_normalise(name: str) -> str:
 
 
 class TestRegistry:
-    def test_all_eight_boards_present(self) -> None:
+    def test_all_nine_boards_present(self) -> None:
         assert sorted(BOARDS) == sorted([
             "kilter", "tension", "grasshopper", "decoy", "soill",
-            "touchstone", "moonboard", "quantum",
+            "touchstone", "moonboard", "quantum", "shinywall",
         ])
 
     def test_protocol_families(self) -> None:
@@ -44,12 +46,15 @@ class TestRegistry:
                           "soill", "touchstone"}
         assert moon == {"moonboard"}
         assert quantum == {"quantum"}
+        assert {k for k, b in BOARDS.items()
+                if b.protocol == PROTOCOL_SHINYWALL} == {"shinywall"}
 
     def test_variant_types_match_protocol(self) -> None:
         for board in BOARDS.values():
             expected = {PROTOCOL_AURORA: AuroraVariant,
                         PROTOCOL_MOONBOARD: MoonVariant,
-                        PROTOCOL_QUANTUM: QuantumVariant}[board.protocol]
+                        PROTOCOL_QUANTUM: QuantumVariant,
+                        PROTOCOL_SHINYWALL: ShinyWallVariant}[board.protocol]
             for variant in board.variants:
                 assert isinstance(variant, expected), (board.key, variant)
 
@@ -206,6 +211,53 @@ class TestScannerCompatibility:
                 name = config.aurora_ble_name(board.display_name)
             elif board.protocol == PROTOCOL_MOONBOARD:
                 name = config.MOONBOARD_BLE_NAME
+            elif board.protocol == PROTOCOL_SHINYWALL:
+                for variant in board.variants:
+                    name = config.shinywall_ble_name(variant.name_code)
+                    assert len(name.encode("utf-8")) <= 29, name
             else:
                 name = config.quantum_ble_name(board.default_variant.key)
             assert len(name.encode("utf-8")) <= 29, name
+
+
+class TestShinyWallIdentity:
+    """Variants mirror CruxCoach's ShinyWallVariant (st3 is not offered)."""
+
+    def test_variants(self) -> None:
+        board = board_for("shinywall")
+        table = {v.key: (v.display_name, v.hold_count, v.columns, v.rows,
+                         v.name_code) for v in board.variants}
+        assert table == {
+            "st1": ("Standard", 311, 12, 35, "STP"),
+            "st4": ("Standard Full", 401, 12, 35, "STF"),
+            "st2": ("Standard Max", 475, 18, 35, "STM"),
+            "st5": ("Standard Max Full", 611, 18, 35, "STMF"),
+            "st0": ("Standard Mini", 239, 12, 29, None),
+        }
+        assert board.default_variant.key == "st1"
+
+    def test_names_parse_under_cruxcoach_rules(self) -> None:
+        # CruxCoach's ShinyWallName: ^ShinyWall_([A-Z0-9]+)_(\S+)$ with an
+        # ST… code, or ^Shiny Wall (ST\d)\b for the Mini.
+        import re
+
+        underscore = re.compile(r"^ShinyWall_([A-Z0-9]+)_(\S+)$")
+        spaced = re.compile(r"^Shiny Wall (ST\d)\b.*$")
+        codes = {"st1": "STP", "st4": "STF", "st2": "STM", "st5": "STMF"}
+        for variant in board_for("shinywall").variants:
+            name = config.shinywall_ble_name(variant.name_code)
+            if variant.key == "st0":
+                assert spaced.match(name).group(1) == "ST0"
+            else:
+                match = underscore.match(name)
+                assert match.group(1) == codes[variant.key]
+                assert match.group(2) == config.SHINYWALL_DEFAULT_IDENTITY
+
+    def test_name_limit_is_loud(self) -> None:
+        assert config.check_ble_name("x" * 29) == "x" * 29
+        with pytest.raises(ValueError, match="30 bytes"):
+            config.check_ble_name("x" * 30)
+        with pytest.raises(ValueError, match="bytes"):
+            config.check_ble_name("ü" * 15)  # 30 UTF-8 bytes
+        with pytest.raises(ValueError, match="empty"):
+            config.check_ble_name("")

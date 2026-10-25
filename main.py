@@ -11,6 +11,8 @@ Usage:
     sudo venv/bin/python main.py --board tension --layout tb2
     sudo venv/bin/python main.py --board moonboard --layout mini-2020
     sudo venv/bin/python main.py --board soill --size 1 --headless
+    sudo venv/bin/python main.py --board shinywall --layout st1 \
+        --name "ShinyWall_STP_ABC123" --headless
     python main.py --list        # show boards, layouts and sizes (no BLE)
 
 The default is one board.  ``--instances 2`` (or the GUI's Simulation
@@ -27,7 +29,7 @@ import threading
 import config
 from ble.adapter import DEFAULT_ADAPTER, InvalidAdapterError, normalize_adapter
 from boards import (BOARDS, PROTOCOL_AURORA, PROTOCOL_MOONBOARD,
-                    PROTOCOL_QUANTUM, board_for)
+                    PROTOCOL_QUANTUM, PROTOCOL_SHINYWALL, board_for)
 from selection import Selection
 
 logging.basicConfig(
@@ -58,6 +60,12 @@ def print_board_list() -> None:
             elif board.protocol == PROTOCOL_MOONBOARD:
                 print(f"  --layout {variant.key}{default}: {variant.display_name} "
                       f"[11x{variant.grid_rows} grid, no --size]")
+            elif board.protocol == PROTOCOL_SHINYWALL:
+                name = config.shinywall_ble_name(variant.name_code)
+                print(f"  --layout {variant.key}{default}: {variant.display_name} "
+                      f"[{variant.columns}x{variant.rows} grid, "
+                      f"{variant.hold_count} holds (provisional), "
+                      f"name {name!r}, no --size]")
             else:
                 print(f"  --layout {variant.key}{default}: {variant.display_name} "
                       f"[{variant.columns}x{variant.rows} original image, "
@@ -91,8 +99,8 @@ def _parse_args() -> argparse.Namespace:
         help="Board layout/variant key (e.g. kilter: original | homewall; "
              "tension: tb1 | tb2 | tb2-spray; moonboard: 2016 | "
              "masters-2017 | masters-2019 | mini-2020; quantum: "
-             "xl | l | m | s | belay). "
-             "Default: the board's first variant.",
+             "xl | l | m | s | belay; shinywall: st1 | st4 | st2 | st5 | "
+             "st0). Default: the board's first variant.",
     )
     parser.add_argument(
         "--size", type=int, default=None,
@@ -126,6 +134,73 @@ def _parse_args() -> argparse.Namespace:
              "one, like a box whose parser cannot keep up. Proves an app's "
              "pacing end to end.",
     )
+    shiny = parser.add_argument_group(
+        "Shiny Wall", "Only with --board shinywall. Defaults follow the "
+        "controller as far as it is known; every deviation an app makes is "
+        "logged.")
+    shiny.add_argument(
+        "--name", default=None, metavar="NAME",
+        help="Exact advertised name, e.g. 'ShinyWall_STP_ABC123' (at most "
+             f"{config.SCAN_RESPONSE_NAME_LIMIT} bytes). Default: "
+             "ShinyWall_<code>_0001 (STP st1, STF st4, STM st2, STMF st5), "
+             f"'{config.SHINYWALL_MINI_NAME}' for st0. Slot 1 only.")
+    shiny.add_argument(
+        "--service-uuid", default=None, metavar="UUID",
+        help="Service that holds the write characteristic "
+             f"(default: {config.SHINYWALL_SERVICE_UUID}, the ESP32 example).")
+    shiny.add_argument(
+        "--no-advertised-uuid", action="store_true", default=None,
+        help="Advertise no service UUID (flags + name only).")
+    shiny.add_argument(
+        "--shiny-holds", type=int, default=None, metavar="N",
+        help="Holds in a state vector (default: the variant's, or the "
+             "geometry file's).")
+    shiny.add_argument(
+        "--shiny-length", default=None, choices=("lenient", "strict"),
+        help="Vector with the wrong number of codes: 'lenient' (default) "
+             "applies what fits and warns, 'strict' rejects it.")
+    shiny.add_argument(
+        "--shiny-codes", default=None, choices=("reject", "accept"),
+        help="Numeric codes other than 0/2/4/6/8: 'reject' (default) "
+             "leaves the hold off, 'accept' shows it as unknown. Non-numeric "
+             "tokens are always invalid.")
+    shiny.add_argument(
+        "--shiny-mtu", type=int, default=None, metavar="MTU",
+        help="ATT MTU of the simulated controller: writes longer than "
+             "MTU-3 bytes are dropped. Pair with ExchangeMTU in "
+             "/etc/bluetooth/main.conf, which sets what BlueZ negotiates.")
+    shiny.add_argument(
+        "--shiny-delay", type=float, default=None, metavar="MS",
+        help="Processing delay per write (blocks the BLE loop and delays "
+             "the write response, like a busy controller).")
+    shiny.add_argument(
+        "--shiny-on-disconnect", default=None, choices=("keep", "clear"),
+        help="LEDs when the last central leaves (default: keep).")
+    shiny.add_argument(
+        "--shiny-props", default=None, metavar="LIST",
+        help="Properties of the write characteristic, comma-separated from "
+             "read, write, write-without-response, notify, indicate "
+             "(default: read,write,write-without-response,notify).")
+    shiny.add_argument(
+        "--shiny-ack", action="store_true", default=None,
+        help="Notify 'OK' after every understood message (clear, vector, "
+             "'*', 'f'), on the write characteristic like the official app "
+             "expects for traverses. Default: off.")
+    shiny.add_argument(
+        "--shiny-notify-uuid", default=None, metavar="UUID",
+        help="Add a separate notify-only characteristic; --shiny-ack then "
+             "notifies there instead.")
+    shiny.add_argument(
+        "--shiny-geometry", default=None, metavar="PATH",
+        help="Hold positions (cruxcoach-shinywall-geometry-v1 JSON). "
+             "Default: data/shinywall_geometry_v1.json if present, else "
+             "hold index order on the grid.")
+    parser.add_argument(
+        "--att-log", action=argparse.BooleanOptionalAction, default=None,
+        help="Log every ATT PDU and link event from the HCI monitor channel "
+             "(MTU exchange, discovery, reads, subscriptions, errors), also "
+             "for attributes the simulator does not offer. Default: on for "
+             "the Shiny Wall, off otherwise.")
     parser.add_argument(
         "--readvertise-delay", type=float, default=0.0, metavar="SECONDS",
         help="After the last central leaves, stay silent this long before "
@@ -192,14 +267,69 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+SHINY_FLAGS = ("name", "service_uuid", "no_advertised_uuid", "shiny_holds",
+               "shiny_length", "shiny_codes", "shiny_mtu", "shiny_delay",
+               "shiny_on_disconnect", "shiny_props", "shiny_ack",
+               "shiny_notify_uuid", "shiny_geometry")
+
+
+def _shiny_options(args):
+    """``(ShinyWallOptions | None, [given flags])`` from the CLI.
+
+    ``None`` when no Shiny Wall flag was given, so other boards see no
+    options at all. Raises ValueError for an invalid value.
+    """
+    from protocols.shinywall import ShinyWallOptions
+
+    given = [flag for flag in SHINY_FLAGS
+             if getattr(args, flag, None) is not None]
+    if not given:
+        return None, []
+    values = {}
+    if args.name is not None:
+        values["name"] = args.name
+    if args.service_uuid is not None:
+        values["service_uuid"] = args.service_uuid
+    if args.no_advertised_uuid:
+        values["advertise_uuid"] = False
+    if args.shiny_ack:
+        values["ack"] = True
+    if args.shiny_notify_uuid is not None:
+        values["notify_uuid"] = args.shiny_notify_uuid
+    for flag, key in (("shiny_holds", "hold_count"),
+                      ("shiny_length", "length_mode"),
+                      ("shiny_codes", "codes_mode"), ("shiny_mtu", "mtu"),
+                      ("shiny_delay", "delay_ms"),
+                      ("shiny_on_disconnect", "on_disconnect"),
+                      ("shiny_geometry", "geometry_path")):
+        if getattr(args, flag) is not None:
+            values[key] = getattr(args, flag)
+    if args.shiny_props is not None:
+        values["props"] = tuple(args.shiny_props.split(","))
+    options = ShinyWallOptions(**values).validated()
+    return options, ["--" + flag.replace("_", "-") for flag in given]
+
+
+def _slot_shiny(shiny, slot: int):
+    """Options for a virtual-board slot: slot 2 gets its own default name."""
+    if slot == 0:
+        return shiny
+    from dataclasses import replace
+
+    from protocols.shinywall import ShinyWallOptions
+
+    base = shiny or ShinyWallOptions()
+    return replace(base, name=None, identity=_next_serial(base.identity))
+
+
 def _build_session(sel, api_level, serial, controller=None,
-                   strict_pacing=False):
+                   strict_pacing=False, shiny=None):
     """Resolve a :class:`Selection` into ``(board, variant, session)``.
 
     ``api_level``/``serial``/``controller``/``strict_pacing`` are
-    Aurora-only knobs; they are dropped for a MoonBoard or Quantum
-    selection (``create_session`` rejects them there), so a board switch
-    onto those never trips the option guard.
+    Aurora-only knobs and ``shiny`` the Shiny Wall's; each is dropped for
+    a board of another family (``create_session`` rejects them there), so
+    a board switch in the GUI never trips the option guard.
     """
     from protocols.session import create_session
 
@@ -212,8 +342,16 @@ def _build_session(sel, api_level, serial, controller=None,
         serial if aurora else None,
         controller if aurora else None,
         strict_pacing if aurora else False,
+        shiny if board.protocol == PROTOCOL_SHINYWALL else None,
     )
     return board, variant, session
+
+
+def _att_log_wanted(att_log, sessions) -> bool:
+    """--att-log as given, else on whenever a Shiny Wall is simulated."""
+    if att_log is not None:
+        return att_log
+    return any(s.board.protocol == PROTOCOL_SHINYWALL for s in sessions)
 
 
 def _next_serial(serial: str) -> str:
@@ -229,7 +367,8 @@ def _next_serial(serial: str) -> str:
 
 def _run_headless(session, multi_connect: bool,
                   adapter: str = DEFAULT_ADAPTER,
-                  readvertise_delay_s: float = 0.0) -> int:
+                  readvertise_delay_s: float = 0.0,
+                  att_log: bool | None = None) -> int:
     """Single board, no GUI: wait for BLE writes until Ctrl+C or a fatal
     peripheral error. Headless has no board bar — switch by restarting."""
     from ble.peripheral import BLEPeripheral
@@ -263,6 +402,7 @@ def _run_headless(session, multi_connect: bool,
         multi_connect=multi_connect,
         adapter=adapter,
         readvertise_delay_s=readvertise_delay_s,
+        att_log=_att_log_wanted(att_log, [session]),
     )
     signal.signal(signal.SIGINT, lambda *_: shutdown())
     try:
@@ -279,7 +419,8 @@ def _run_headless(session, multi_connect: bool,
 
 def _run_headless_multi(sessions: list, multi_connect: bool,
                         adapter: str = DEFAULT_ADAPTER,
-                        readvertise_delay_s: float = 0.0) -> int:
+                        readvertise_delay_s: float = 0.0,
+                        att_log: bool | None = None) -> int:
     """Two board sessions and renderers behind one physical controller."""
     from ble.multiplex import MultiplexedBLEPeripheral, VirtualBoard
 
@@ -313,7 +454,8 @@ def _run_headless_multi(sessions: list, multi_connect: bool,
     ble = MultiplexedBLEPeripheral(
         boards, on_fatal=peripheral_failed,
         multi_connect=multi_connect, adapter=adapter,
-        readvertise_delay_s=readvertise_delay_s)
+        readvertise_delay_s=readvertise_delay_s,
+        att_log=_att_log_wanted(att_log, sessions))
     signal.signal(signal.SIGINT, lambda *_: shutdown())
     try:
         ble.start()
@@ -329,7 +471,8 @@ def _run_gui(selection, second_selection, api_level, serial, second_serial,
              adapter: str = DEFAULT_ADAPTER, window_height: int | None = None,
              fullscreen: bool = False, controller: str | None = None,
              strict_pacing: bool = False,
-             readvertise_delay_s: float = 0.0) -> int:
+             readvertise_delay_s: float = 0.0, shiny=None,
+             att_log: bool | None = None) -> int:
     """GUI mode: ONE persistent Tk root; a board-bar pick tears down the
     current panel + BLE peripheral and rebuilds them for the new board.
 
@@ -420,10 +563,11 @@ def _run_gui(selection, second_selection, api_level, serial, second_serial,
         serials = [serial, second_serial]
         resolved = [
             _build_session(state["selections"][slot], api_level, serials[slot],
-                           controller, strict_pacing)
+                           controller, strict_pacing, _slot_shiny(shiny, slot))
             for slot in range(count)
         ]
         sessions = [item[2] for item in resolved]
+        sniff = _att_log_wanted(att_log, sessions)
         root.title(sessions[0].window_title if count == 1
                    else "Board Simulator — two virtual boards")
 
@@ -472,7 +616,7 @@ def _run_gui(selection, second_selection, api_level, serial, second_serial,
                 on_disconnect=lambda p=panel, s=session: (
                     s.connection_lost(), p.update_status("Advertising...")),
                 on_fatal=fatal, multi_connect=state["multi"], adapter=adapter,
-                readvertise_delay_s=readvertise_delay_s)
+                readvertise_delay_s=readvertise_delay_s, att_log=sniff)
         else:
             virtual_boards = [
                 VirtualBoard(
@@ -487,7 +631,7 @@ def _run_gui(selection, second_selection, api_level, serial, second_serial,
             ble = MultiplexedBLEPeripheral(
                 virtual_boards, on_fatal=fatal,
                 multi_connect=state["multi"], adapter=adapter,
-                readvertise_delay_s=readvertise_delay_s)
+                readvertise_delay_s=readvertise_delay_s, att_log=sniff)
         state["ble"] = ble
         ble.start()
 
@@ -533,14 +677,21 @@ def main() -> int:
     second_serial = (args.second_serial if kilter_built
                      else args.second_serial or _next_serial(first_serial))
     try:
+        shiny, shiny_flags = _shiny_options(args)
         board, variant, session = _build_session(
             sel, args.api_level, args.serial, args.controller,
-            args.strict_pacing)
+            args.strict_pacing, shiny)
         second_board, second_variant, second_session = _build_session(
             second_sel, args.api_level, second_serial, args.controller,
-            args.strict_pacing)
-    except ValueError as exc:
+            args.strict_pacing, _slot_shiny(shiny, 1))
+    except (ValueError, OSError) as exc:
         logger.error("%s", exc)
+        return 2
+    if shiny_flags and PROTOCOL_SHINYWALL not in (
+            board.protocol,
+            second_board.protocol if args.instances == 2 else None):
+        logger.error("%s only applies to the Shiny Wall, not %s",
+                     "/".join(shiny_flags), board.display_name)
         return 2
     if ((args.controller or args.strict_pacing)
             and PROTOCOL_AURORA not in (board.protocol, second_board.protocol
@@ -568,6 +719,12 @@ def main() -> int:
         logger.info("Controller: %s, advertised as '%s'%s", session.controller,
                     session.ble_name,
                     " (strict pacing)" if args.strict_pacing else "")
+    if board.protocol == PROTOCOL_SHINYWALL:
+        logger.info("Shiny Wall advertised as '%s', service %s (%s), "
+                    "write characteristic %s", session.ble_name,
+                    session.options.service_uuid,
+                    "advertised" if session.options.advertise_uuid
+                    else "not advertised", config.SHINYWALL_WRITE_UUID)
     logger.info("Mode: %s", "headless" if headless else "GUI")
     logger.info("Adapter: %s", args.adapter)
     logger.info("Virtual boards: %d", args.instances)
@@ -590,14 +747,14 @@ def main() -> int:
             if args.instances == 2:
                 return _run_headless_multi(
                     [session, second_session], multi, args.adapter,
-                    args.readvertise_delay)
+                    args.readvertise_delay, args.att_log)
             return _run_headless(session, multi, args.adapter,
-                                 args.readvertise_delay)
+                                 args.readvertise_delay, args.att_log)
         return _run_gui(
             sel, second_sel, args.api_level, args.serial, second_serial,
             multi, args.instances, args.adapter, args.window_height,
             args.fullscreen, args.controller, args.strict_pacing,
-            args.readvertise_delay)
+            args.readvertise_delay, shiny, args.att_log)
     finally:
         logger.info("Goodbye")
 

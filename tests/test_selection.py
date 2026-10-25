@@ -13,7 +13,8 @@ class TestChoices:
     def test_board_choices_cover_all_boards(self) -> None:
         keys = [k for k, _ in sel.board_choices()]
         assert set(keys) == {"kilter", "tension", "grasshopper", "decoy",
-                             "soill", "touchstone", "moonboard", "quantum"}
+                             "soill", "touchstone", "moonboard", "quantum",
+                             "shinywall"}
 
     def test_layout_choices_for_kilter(self) -> None:
         assert sel.layout_choices("kilter") == [
