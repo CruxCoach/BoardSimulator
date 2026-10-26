@@ -143,10 +143,11 @@ window.BLE={
   canProbe() {for(const panel of panelAPIs)panel.canProbe();},
   canResume() {for(const panel of panelAPIs)panel.canResume();},
   /* Android renames the whole phone for a board: its current Bluetooth name, and a
-   * reset button while the phone's own name is out (or unknown). */
+   * reset button while the phone's own name is out (or unknown). It takes the
+   * tagline's place so the board controls stay on the first screen. */
   phoneName(state) {
-    document.getElementById('phoneName').hidden=false;
-    document.getElementById('phoneNameText').textContent=state.text;
+    document.getElementById('tagline').hidden=true;
+    const line=document.getElementById('phoneName');line.hidden=false;line.textContent=state.text;
     const button=document.getElementById('resetName');
     button.hidden=!state.button;button.textContent=state.button||'';
   }

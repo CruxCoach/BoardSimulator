@@ -1,13 +1,13 @@
 :root {color-scheme:dark;font:15px system-ui,sans-serif;background:#14191e;color:#e7eff4}
 body{margin:0;padding:16px;padding-top:max(16px,env(safe-area-inset-top));padding-bottom:max(16px,env(safe-area-inset-bottom))}
-h1{font-size:24px;margin:0}header p,#capability{color:#aabac5;font-size:13px}
+h1{font-size:24px;margin:0}header p,#capability,#parity{color:#aabac5;font-size:13px}
 .controls{display:flex;flex-wrap:wrap;gap:10px}label{display:flex;flex-direction:column;gap:4px;flex:1;min-width:130px}
 input,select,button{font:inherit;padding:10px;border-radius:6px;background:#24313c;color:inherit;border:1px solid #647685}
 button{align-self:end;cursor:pointer}#start{background:#166449}button:disabled,select:disabled,input:disabled{opacity:.55}
 #strictLabel{flex-direction:row;align-items:center;gap:8px}
 #status{padding:10px;background:#25353e;white-space:pre-wrap}
-#phoneName{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px;margin-bottom:12px;background:#25353e;overflow-wrap:anywhere}
-#phoneNameText{flex:1;min-width:200px}#phoneName button{align-self:center}#identity{font-family:monospace;overflow-wrap:anywhere}
+#titleRow{display:flex;align-items:center;justify-content:space-between;gap:8px}
+#resetName{flex:none;align-self:center;padding:4px 10px;font-size:13px}#phoneName{overflow-wrap:anywhere}#identity{font-family:monospace;overflow-wrap:anywhere}
 #view{height:55vh;min-height:260px;width:100%;background:#101214}canvas{width:100%;height:100%;display:block}
 #legend{font-size:13px}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;font-size:11px}
 [hidden]{display:none!important}

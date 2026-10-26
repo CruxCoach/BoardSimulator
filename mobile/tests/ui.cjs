@@ -94,17 +94,32 @@ const fixtures=require('./generated-fixtures.json');
   // Android's phone-name line: hidden until native reports, button only while the own name is out.
   const bar=page.locator('#phoneName'),reset=page.locator('#resetName');
   assert.equal(await bar.isVisible(),false);
-  await page.evaluate(()=>BLE.phoneName({text:'Phone Bluetooth name: QB_020000000001 \u00b7 lent to the simulator, Nokia 6.1 comes back on Stop',button:'Reset phone name'}));
+  await page.evaluate(()=>BLE.phoneName({text:'Bluetooth name: QB_020000000001 \u00b7 Nokia 6.1 back on Stop',button:'Reset phone name'}));
   assert.equal(await bar.isVisible(),true);
-  assert.match(await page.locator('#phoneNameText').textContent(),/QB_020000000001.*Nokia 6\.1/);
+  assert.match(await bar.textContent(),/QB_020000000001.*Nokia 6\.1/);
+  assert.equal(await page.locator('#tagline').isVisible(),false);  // the line takes the tagline's place
   assert.equal(await reset.textContent(),'Reset phone name');
   await reset.click();
   assert.deepEqual(await page.evaluate(()=>messages.at(-1)),{command:'resetName'});
   if(process.env.UI_SCREENSHOT)await page.screenshot({path:process.env.UI_SCREENSHOT,fullPage:true});
-  await page.evaluate(()=>BLE.phoneName({text:'Phone Bluetooth name: Nokia 6.1',button:null}));
+  await page.evaluate(()=>BLE.phoneName({text:'Bluetooth name: Nokia 6.1',button:null}));
   assert.equal(await reset.isVisible(),false);
-  assert.equal(await page.locator('#phoneNameText').textContent(),'Phone Bluetooth name: Nokia 6.1');
+  assert.equal(await bar.textContent(),'Bluetooth name: Nokia 6.1');
+  // Nokia 6.1 (1080 x 1920, density 420): 411 x 659 CSS px between the system bars.
+  // With the phone-name line shown, every board's Stop stays on the first screen.
+  const phone=await browser.newPage({viewport:{width:411,height:659},deviceScaleFactor:2.625,isMobile:true});
+  phone.on('pageerror',e=>errors.push(e.message));
+  await phone.addInitScript(()=>{window.Native={postMessage:()=>{}};});
+  await phone.goto(pathToFileURL(path.join(__dirname,'../shared/index.html')).href);
+  await phone.waitForFunction(()=>typeof BLE!=='undefined');
+  await phone.evaluate(()=>BLE.phoneName({text:'Bluetooth name: ShinyWall_STP_Climbbox1 \u00b7 Nokia 6.1 back on Stop',button:'Reset phone name'}));
+  for(const board of ['kilter','tension','moonboard','quantum','shinywall']) {
+    await phone.locator('[id=board]').selectOption(board);
+    const stop=await phone.locator('[id=stop]').boundingBox(),reachable=await phone.locator('#resetName').boundingBox();
+    assert.ok(stop.y+stop.height<=659,board+': Stop ends at '+(stop.y+stop.height)+' px, below the first screen');
+    assert.ok(reachable.y>=0&&reachable.y+reachable.height<=659,'reset button on the first screen');
+  }
   assert.deepEqual(errors,[]);
-  console.log('Two-panel UI: routed reception, isolated rendering, runtime switch generation guard, independent modes, the Kilter-built box, the Shiny Wall and the phone-name line passed (mock transport only)');
+  console.log('Two-panel UI: routed reception, isolated rendering, runtime switch generation guard, independent modes, the Kilter-built box, the Shiny Wall, the phone-name line and the phone-size layout passed (mock transport only)');
   await browser.close();
 })().catch(e=>{console.error(e);process.exit(1);});

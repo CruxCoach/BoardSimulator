@@ -12,6 +12,7 @@ import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import org.json.JSONArray;
@@ -44,6 +45,12 @@ public final class MainActivity extends Activity {
         names.setListener(this::phoneName);
         names.restoreIfStale();  // a name an earlier run left behind
         root=new FrameLayout(this);
+        if (Build.VERSION.SDK_INT >= 35) root.setOnApplyWindowInsetsListener((view, insets) -> {
+            // Android 15 lays apps out under the system bars: keep the page and its buttons clear of them.
+            android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());
+            view.setPadding(bars.left,bars.top,bars.right,bars.bottom);
+            return WindowInsets.CONSUMED;
+        });
         setContentView(root);
         createPage();
     }

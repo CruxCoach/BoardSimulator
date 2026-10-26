@@ -129,7 +129,7 @@ public class AdapterNameGuardTest {
         assertTrue(problem, problem.contains("board name"));
         assertNull(store.record);
         assertTrue(radio.sent.isEmpty());
-        radio.name = "CruxCoach·Kilter Board@3";  // CruxCoach shares a board on this phone
+        radio.name = "CruxCoach\u00b7Kilter Board@3";  // CruxCoach shares a board on this phone
         assertNotNull(guard.lend(activity, "MoonBoard"));
         assertNull(store.record);
     }
@@ -325,12 +325,12 @@ public class AdapterNameGuardTest {
         AdapterNameGuard guard = guard();
         List<AdapterNameGuard.Status> seen = new ArrayList<>();
         guard.setListener(seen::add);
-        assertEquals("Phone Bluetooth name: " + OWN, seen.get(0).text());
+        assertEquals("Bluetooth name: " + OWN, seen.get(0).text());
         guard.lend(activity, QUANTUM);
         boardRenames(QUANTUM);
         clock.advance(200);
         AdapterNameGuard.Status lent = guard.status();
-        assertTrue(lent.text(), lent.text().contains(QUANTUM) && lent.text().contains(OWN));
+        assertEquals("Bluetooth name: " + QUANTUM + " \u00b7 " + OWN + " back on Stop", lent.text());
         assertEquals("Reset phone name", lent.button());
     }
 }

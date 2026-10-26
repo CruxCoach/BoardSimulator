@@ -31,7 +31,7 @@ public class AdapterNameRulesTest {
 
     @Test public void cruxCoachSharingNamesAreNeverOwnNames() {
         AdapterNameRules rules = AdapterNameRules.parse("");
-        assertTrue(rules.isBoardName("CruxCoach·Kilter Board@3"));
+        assertTrue(rules.isBoardName("CruxCoach\u00b7Kilter Board@3"));
         assertTrue(rules.isBoardName("CruxCoach@3"));
         assertTrue(rules.isBoardName("CruxRelay Kilter"));
         assertFalse(rules.isBoardName("CruxCoach Test"));

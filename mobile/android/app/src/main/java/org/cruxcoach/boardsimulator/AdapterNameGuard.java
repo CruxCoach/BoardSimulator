@@ -80,21 +80,22 @@ final class AdapterNameGuard {
             this.suggestion = suggestion; this.bluetoothOff = bluetoothOff;
         }
 
+        /** Short: the line must not push the board controls off a phone's first screen. */
         String text() {
-            String name = "Phone Bluetooth name: " + (current == null ? "unknown" : current);
+            String name = "Bluetooth name: " + (current == null ? "unknown" : current);
             switch (phase) {
                 case OWN: return name;
                 case UNREADABLE:
-                    return "Phone Bluetooth name: not readable" +
+                    return "Bluetooth name: not readable" +
                             (bluetoothOff ? " while Bluetooth is off" : " (Nearby devices permission missing)");
                 case UNKNOWN:
                     return name + " is a board name; the phone's own name is unknown." +
                             (suggestion == null ? " Rename the phone in Android Settings > About phone > Device name." : "");
-                case LENT: return name + " · lent to the simulator, " + original + " comes back on Stop";
-                case NEEDS_PERMISSION: return "Phone Bluetooth name: giving back " + original + " needs the Nearby devices permission";
+                case LENT: return name + " \u00b7 " + original + " back on Stop";
+                case NEEDS_PERMISSION: return "Bluetooth name: giving back " + original + " needs Nearby devices permission";
                 default:
-                    if (original.equals(current)) return name + " · back, confirming";
-                    return name + " · giving back " + original + (bluetoothOff ? " once Bluetooth is on" : "");
+                    if (original.equals(current)) return name + " \u00b7 back, confirming";
+                    return name + " \u00b7 giving back " + original + (bluetoothOff ? " once Bluetooth is on" : "");
             }
         }
 
