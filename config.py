@@ -114,6 +114,9 @@ def quantum_ble_name(model_key: str, identity: str = "020000000001") -> str:
 SHINYWALL_SERVICE_UUID: str = "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 SHINYWALL_WRITE_UUID: str = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 SHINYWALL_DEFAULT_IDENTITY: str = "0001"
+# Start of every ShinyWall_<code>_<id> name, also the official app's search
+# string when a wall has no stored controller name.
+SHINYWALL_NAME_PREFIX: str = "ShinyWall_"
 # The Mini advertises one fixed name instead of ShinyWall_<code>_<id>.
 SHINYWALL_MINI_NAME: str = "Shiny Wall ST0 (ShinyMini)"
 # Characteristic properties the simulator offers by default: the example's
@@ -155,7 +158,7 @@ def shinywall_ble_name(name_code: str | None,
     """
     if name_code is None:
         return SHINYWALL_MINI_NAME
-    return check_ble_name(f"ShinyWall_{name_code}_{identity}")
+    return check_ble_name(f"{SHINYWALL_NAME_PREFIX}{name_code}_{identity}")
 
 
 def normalize_uuid(value: str) -> str:
