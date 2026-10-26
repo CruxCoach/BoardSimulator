@@ -36,7 +36,7 @@ final class Peripheral {
     private final Map<BluetoothDevice,Link> links=new LinkedHashMap<>();
     private boolean multi, servicesReady;
     private int advertisingEpoch;
-    private String oldName, desiredName;
+    private String desiredName;
     private boolean naming;
     private int epoch,runToken;
     private final ArrayDeque<BluetoothGattService> services = new ArrayDeque<>();
@@ -116,8 +116,8 @@ final class Peripheral {
                 }
                 services.add(service);
             }
-            oldName=adapter.getName();
-            if(!desiredName.equals(oldName)) {
+            // MainActivity recorded the phone's own name (AdapterNameGuard) before this start.
+            if(!desiredName.equals(adapter.getName())) {
                 naming=true;
                 if(!adapter.setName(desiredName)) throw new IllegalStateException("Cannot set Bluetooth name");
                 status("Setting adapter name to " + desiredName, true);
@@ -323,10 +323,10 @@ final class Peripheral {
             advertisingEpoch++;
             if(advertiser!=null&&advertising!=null)advertiser.stopAdvertisingSet(advertising);
             if(server!=null) {for(Link link:links.values())if(link.assigned)server.cancelConnection(link.device);server.close();}
-            if(!multiplexed&&adapter!=null&&adapter.isEnabled()&&oldName!=null&&desiredName!=null&&desiredName.equals(adapter.getName()))adapter.setName(oldName);
+            // The phone's own name goes back through AdapterNameGuard once every board stopped.
         } catch(SecurityException ignored) { /* Permissions can be revoked in Settings. */ }
         if(registered) {activity.unregisterReceiver(changes);registered=false;}
-        server=null;links.clear();advertising=null;advertisingSet=null;advertisementEnabled=false;oldName=null;desiredName=null;
+        server=null;links.clear();advertising=null;advertisingSet=null;advertisementEnabled=false;desiredName=null;
         services.clear();notifications.clear();notifying=false;inFlight=null;
     }
     private static String hex(byte[] b) {

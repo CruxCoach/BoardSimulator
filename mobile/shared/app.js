@@ -141,8 +141,17 @@ window.BLE={
   readState(slot=0) {return panelAPIs[slot]?panelAPIs[slot].readState():[1,71,0,0];},
   disconnected(peer,slot=0) {if(panelAPIs[slot])panelAPIs[slot].disconnected(peer);},
   canProbe() {for(const panel of panelAPIs)panel.canProbe();},
-  canResume() {for(const panel of panelAPIs)panel.canResume();}
+  canResume() {for(const panel of panelAPIs)panel.canResume();},
+  /* Android renames the whole phone for a board: its current Bluetooth name, and a
+   * reset button while the phone's own name is out (or unknown). */
+  phoneName(state) {
+    document.getElementById('phoneName').hidden=false;
+    document.getElementById('phoneNameText').textContent=state.text;
+    const button=document.getElementById('resetName');
+    button.hidden=!state.button;button.textContent=state.button||'';
+  }
 };
+document.getElementById('resetName').onclick=()=>{if(window.Native)window.Native.postMessage(JSON.stringify({command:'resetName'}));};
 function rebuild(count) {
   for(const api of panelAPIs)api.dispose();
   panels.textContent='';panelAPIs=[];

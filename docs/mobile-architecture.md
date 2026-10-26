@@ -52,9 +52,16 @@ use manifest Bluetooth permissions. The app does not scan, so it requests no
 location/scan permission. See Google's
 [permission contract](https://developer.android.com/develop/connectivity/bluetooth/bt-permissions).
 The full service UUID is in advertising data and the board name in scan response.
-Android's name is adapter-global, so initial endpoint starts are serialized and
-the prior name is restored on normal shutdown if it still belongs to this app.
-An abrupt kill can prevent restoration. See
+Android's name is adapter-global, so initial endpoint starts are serialized.
+`AdapterNameGuard` lends the phone's name to the boards: before the first rename
+it commits the phone's own name to SharedPreferences, never overwrites an open
+record and never records a board name (`generated/adapter_names.txt`, exported
+from the registry, plus CruxCoach's sharing names) as the phone's own. The name
+goes back once every board stopped, on the next app start, from a crash handler,
+and through `NameRecoveryReceiver` (boot, app update, ACL connect/disconnect),
+which is enabled only while a record is open. The record closes only once the
+own name is read back; a name the user set in Android's settings meanwhile wins.
+*Force stop* stops all delivery until the app is opened again. See
 [advertising APIs](https://developer.android.com/reference/android/bluetooth/le/BluetoothLeAdvertiser).
 
 Single-board Exclusive stops the existing advertising set on the connection

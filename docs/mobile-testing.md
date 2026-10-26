@@ -163,6 +163,24 @@ For each configuration:
    Verify old services are removed and Android's prior adapter name restored.
 8. Repeat using official apps; scanner behavior is an independent acceptance gate.
 
+### Android: the phone's Bluetooth name
+
+Note the name first (`adb shell settings get secure bluetooth_name`); it must
+read the same at the end. `adb logcat -s BoardSimName` shows the record and
+"Phone's own Bluetooth name is back: <name>". For each case start a board, let
+the name change, then:
+
+| Case | Expected |
+|---|---|
+| Stop, or app to background | Name back within about 3 s, reset button gone |
+| Swipe the app away from recents | Name back (the app stops in the background first) |
+| `adb shell am crash org.cruxcoach.boardsimulator` | Name back at once (crash handler) |
+| Kill the process (`adb shell run-as org.cruxcoach.boardsimulator kill -9 <pid>`) | Name back at the next Bluetooth link change (e.g. the controller disconnects) or app start |
+| Reboot without opening the app | Name back after unlock (boot receiver) |
+| `adb install -r` of the same APK without opening it | Name back (update receiver) |
+| `adb shell am force-stop org.cruxcoach.boardsimulator` | Name stays (Android delivers nothing); back on the next app start |
+| Phone already carries a board name, no record (e.g. left by an older build) | Start is refused with a message; the top line offers "Set phone name to <device name>" |
+
 Use existing `tests/test_ble_mock_client.py` where applicable for a real external
 central. A successful mock-client run is not a substitute for official-app tests.
 

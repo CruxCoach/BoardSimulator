@@ -193,6 +193,15 @@ equal to it — a test checks); indices without a hold are not drawn and log
 3 foot, 4 top) changes the wall shared by all centrals; `*@.` (disco) and
 `*a/b/….` (games) are logged only.
 
+### Android: the phone's Bluetooth name
+
+Android renames the whole phone for a board. `AdapterNameGuard` (plain Java,
+JVM-tested) is the only place that decides about it: commit the own name before
+the first rename, never record a board name (`generated/adapter_names.txt` from
+`tools/export_mobile.py`, plus CruxCoach sharing names), give it back on stop,
+app start, crash and via `NameRecoveryReceiver` (enabled only while a record is
+open). `Peripheral` renames but never restores by itself.
+
 ### Decoder details
 
 An empty Aurora ONLY packet (CruxCoach `encodeClear()`) fires

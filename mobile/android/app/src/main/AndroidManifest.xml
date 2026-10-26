@@ -4,9 +4,21 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- NameRecoveryReceiver: give the phone's Bluetooth name back after a restart. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <application android:label="BoardSimulator" android:theme="@android:style/Theme.Material.NoActionBar"
         android:allowBackup="false" android:supportsRtl="true">
         <activity android:name=".RoutingProbeActivity" android:exported="false" />
+        <!-- On only while the phone's own Bluetooth name is out (AdapterNames);
+             exported for system broadcasts, all of them protected. -->
+        <receiver android:name=".NameRecoveryReceiver" android:enabled="false" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+                <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
+            </intent-filter>
+        </receiver>
         <activity android:name=".MainActivity" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>

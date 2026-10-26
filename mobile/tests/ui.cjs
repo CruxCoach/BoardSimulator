@@ -91,8 +91,20 @@ const fixtures=require('./generated-fixtures.json');
   await wall.locator('[id=shinyName]').fill('ü'.repeat(15));  // 15 characters, 30 bytes
   await wall.locator('[id=shinyName]').dispatchEvent('change');
   assert.match(await wall.locator('[id=identity]').textContent(),/at most 29/);
+  // Android's phone-name line: hidden until native reports, button only while the own name is out.
+  const bar=page.locator('#phoneName'),reset=page.locator('#resetName');
+  assert.equal(await bar.isVisible(),false);
+  await page.evaluate(()=>BLE.phoneName({text:'Phone Bluetooth name: QB_020000000001 \u00b7 lent to the simulator, Nokia 6.1 comes back on Stop',button:'Reset phone name'}));
+  assert.equal(await bar.isVisible(),true);
+  assert.match(await page.locator('#phoneNameText').textContent(),/QB_020000000001.*Nokia 6\.1/);
+  assert.equal(await reset.textContent(),'Reset phone name');
+  await reset.click();
+  assert.deepEqual(await page.evaluate(()=>messages.at(-1)),{command:'resetName'});
   if(process.env.UI_SCREENSHOT)await page.screenshot({path:process.env.UI_SCREENSHOT,fullPage:true});
+  await page.evaluate(()=>BLE.phoneName({text:'Phone Bluetooth name: Nokia 6.1',button:null}));
+  assert.equal(await reset.isVisible(),false);
+  assert.equal(await page.locator('#phoneNameText').textContent(),'Phone Bluetooth name: Nokia 6.1');
   assert.deepEqual(errors,[]);
-  console.log('Two-panel UI: routed reception, isolated rendering, runtime switch generation guard, independent modes, the Kilter-built box and the Shiny Wall passed (mock transport only)');
+  console.log('Two-panel UI: routed reception, isolated rendering, runtime switch generation guard, independent modes, the Kilter-built box, the Shiny Wall and the phone-name line passed (mock transport only)');
   await browser.close();
 })().catch(e=>{console.error(e);process.exit(1);});

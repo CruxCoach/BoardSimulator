@@ -25,8 +25,8 @@ public final class MainActivity extends Activity {
     private int instances=1, busySlot=-1, pendingSlot;
     private JSONObject pending;
     private boolean foreground;
-    private String originalName;
-    private final java.util.Set<String> ownedNames=new java.util.HashSet<>();
+    /** Lends the phone's Bluetooth name to the boards and gives it back. */
+    private AdapterNameGuard names;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -42,12 +42,22 @@ public final class MainActivity extends Activity {
         });
         web.addJavascriptInterface(new Bridge(), "Native");
         for(int slot=0;slot<2;slot++)peripherals[slot]=new Peripheral(this,slot);
+        names=AdapterNames.get(this);
+        names.setListener(this::phoneName);
+        names.restoreIfStale();  // a name an earlier run left behind
         setContentView(web);
         web.loadUrl("file:///android_asset/index.html");
     }
+    /** Status line with the phone's Bluetooth name and the reset button. */
+    private void phoneName(AdapterNameGuard.Status state) {
+        try {
+            JSONObject line=new JSONObject().put("text",state.text()).put("button",state.button()==null?JSONObject.NULL:state.button());
+            web.evaluateJavascript("window.BLE&&BLE.phoneName&&BLE.phoneName("+line+")", null);
+        } catch (Exception ignored) { /* The page shows the line once it can. */ }
+    }
     public void status(int slot, String text, boolean running) {
         web.evaluateJavascript("BLE.status(" + JSONObject.quote(text) + "," + running + ","+slot+")", null);
-        if(!running){profiles[slot]=null;if(profiles[0]==null&&profiles[1]==null)restoreName();if(busySlot==slot)ready(slot);}
+        if(!running){profiles[slot]=null;if(profiles[0]==null&&profiles[1]==null)names.giveBack(this);if(busySlot==slot)ready(slot);}
     }
     public void disconnected(int slot, String peer) { web.evaluateJavascript("BLE.disconnected("+JSONObject.quote(peer)+","+slot+")", null); }
     boolean ownedByOther(int slot, android.bluetooth.BluetoothDevice device) {
@@ -94,9 +104,9 @@ public final class MainActivity extends Activity {
             peripherals[slot].stop();profiles[slot]=null;
             JSONObject other=profiles[1-slot];
             if(other!=null && !disjoint(profile,other)) {status(slot,"Overlapping GATT profiles: automatic advertiser-to-connection routing is unavailable. Use the routing experiment; full parity is pending.",false);drain();return;}
-            android.bluetooth.BluetoothAdapter adapter=((android.bluetooth.BluetoothManager)getSystemService(BLUETOOTH_SERVICE)).getAdapter();
-            if(originalName==null&&adapter!=null)originalName=adapter.getName();
-            ownedNames.add(profile.getString("name"));
+            // The phone's own name is recorded durably before any board renames it.
+            String problem=names.lend(this,profile.getString("name"));
+            if(problem!=null){status(slot,problem,false);drain();return;}
             profiles[slot]=profile;busySlot=slot;
             peripherals[slot].start(profile,modes[slot]);
         }catch(Exception e){status(slot,e.getMessage(),false);}
@@ -111,18 +121,25 @@ public final class MainActivity extends Activity {
     private void stopAll() {
         starts.clear();busySlot=-1;pending=null;
         for(int slot=0;slot<2;slot++){peripherals[slot].stop();profiles[slot]=null;}
-        restoreName();
+        names.giveBack(this);
     }
-    @android.annotation.SuppressLint("MissingPermission")
-    private void restoreName() {
-        try {
-            android.bluetooth.BluetoothAdapter adapter=((android.bluetooth.BluetoothManager)getSystemService(BLUETOOTH_SERVICE)).getAdapter();
-            if(adapter!=null&&adapter.isEnabled()&&originalName!=null&&ownedNames.contains(adapter.getName()))adapter.setName(originalName);
-        }catch(SecurityException ignored){}
-        originalName=null;ownedNames.clear();
+    /** Reset button: stops the boards, then gives the phone its own name back. */
+    private void resetName() {
+        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT}, 2);
+            return;
+        }
+        boolean[] running={profiles[0]!=null,profiles[1]!=null};
+        stopAll();
+        for(int slot=0;slot<instances;slot++)if(running[slot])status(slot,"Stopped to reset the phone name",false);
+        names.reset();
     }
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(request, permissions, results);
+        if (request == 2) {
+            if (results.length == 1 && results[0] == PackageManager.PERMISSION_GRANTED) resetName(); else names.refresh();
+            return;
+        }
         if (request != 1) return;
         JSONObject profile = pending; pending = null;
         if (results.length == 2 && results[0] == PackageManager.PERMISSION_GRANTED && results[1] == PackageManager.PERMISSION_GRANTED && profile != null) start(pendingSlot,profile);
@@ -143,6 +160,7 @@ public final class MainActivity extends Activity {
                         case "instances": stopAll(); instances=message.getInt("count");if(instances<1||instances>2)throw new IllegalArgumentException("Invalid count");for(Peripheral p:peripherals)p.setMultiplexed(instances==2);break;
                         case "probe": startActivity(new android.content.Intent(MainActivity.this,RoutingProbeActivity.class)); break;
                         case "stop": {final int target=slot;starts.removeIf(r->r.optInt("slot")==target);peripherals[slot].stop();status(slot,"Stopped",false);break;}
+                        case "resetName": resetName(); break;
                         case "copy": ((ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("BoardSimulator", message.getString("text"))); break;
                         case "ready": web.evaluateJavascript("BLE.canProbe()",null); status(slot,"Android " + Build.VERSION.RELEASE + " · Start to check advertiser support", false); break;
                         default: throw new IllegalArgumentException("Unknown bridge command");
@@ -151,10 +169,10 @@ public final class MainActivity extends Activity {
             });
         }
     }
-    @Override protected void onResume() { super.onResume(); foreground = true; }
+    @Override protected void onResume() { super.onResume(); foreground = true; names.restoreIfStale(); }
     @Override protected void onStop() {
         foreground = false; pending = null;
         stopAll();for(int slot=0;slot<instances;slot++)status(slot,"Stopped in background. Press Start to resume.",false);super.onStop();
     }
-    @Override protected void onDestroy() { stopAll(); web.removeJavascriptInterface("Native"); web.destroy(); super.onDestroy(); }
+    @Override protected void onDestroy() { stopAll(); names.setListener(null); web.removeJavascriptInterface("Native"); web.destroy(); super.onDestroy(); }
 }

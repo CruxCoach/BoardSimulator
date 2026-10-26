@@ -56,8 +56,13 @@ cd mobile/android
 ```
 
 Changing board/layout/size rebuilds that mobile endpoint at runtime. Backgrounding
-stops the mobile peripherals; Start resumes with a new session. Android temporarily changes the
-adapter name and restores it on normal Stop. iOS advertisement placement/name
+stops the mobile peripherals; Start resumes with a new session. Android has no name per
+advertisement, so a board renames the whole phone (cars and headphones see that name too). The app
+first saves the phone's own Bluetooth name durably, never takes a board name for it, and gives it
+back on Stop, on the next app start and, while the name is out, after a reboot, an app update or
+the next Bluetooth link change. A line at the top shows the phone's current Bluetooth name, with
+**Reset phone name** while its own name is out. After *Force stop* Android wakes nothing until the
+app is opened again. iOS advertisement placement/name
 truncation is controlled by the OS. **Full Linux feature parity is not achieved.** Two panels with real BLE endpoints
 are implemented experimentally for Quantum + Aurora/MoonBoard. Duplicate or
 shared UART profiles remain rejected because advertising-to-link routing is

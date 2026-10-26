@@ -5,7 +5,9 @@ h1{font-size:24px;margin:0}header p,#capability{color:#aabac5;font-size:13px}
 input,select,button{font:inherit;padding:10px;border-radius:6px;background:#24313c;color:inherit;border:1px solid #647685}
 button{align-self:end;cursor:pointer}#start{background:#166449}button:disabled,select:disabled,input:disabled{opacity:.55}
 #strictLabel{flex-direction:row;align-items:center;gap:8px}
-#status{padding:10px;background:#25353e;white-space:pre-wrap}#identity{font-family:monospace;overflow-wrap:anywhere}
+#status{padding:10px;background:#25353e;white-space:pre-wrap}
+#phoneName{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px;margin-bottom:12px;background:#25353e;overflow-wrap:anywhere}
+#phoneNameText{flex:1;min-width:200px}#phoneName button{align-self:center}#identity{font-family:monospace;overflow-wrap:anywhere}
 #view{height:55vh;min-height:260px;width:100%;background:#101214}canvas{width:100%;height:100%;display:block}
 #legend{font-size:13px}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;font-size:11px}
 [hidden]{display:none!important}

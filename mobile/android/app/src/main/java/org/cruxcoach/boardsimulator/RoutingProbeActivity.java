@@ -27,9 +27,10 @@ public final class RoutingProbeActivity extends Activity {
     private BluetoothAdapter adapter;
     private BluetoothLeAdvertiser advertiser;
     private TextView output;
-    private String oldName, pendingName;
+    private String pendingName;
     private int pendingSlot, epoch;
-    private boolean registered;
+    private boolean registered, lent;
+    private AdapterNameGuard phoneName;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final StringBuilder log=new StringBuilder();
     private final BroadcastReceiver receiver=new BroadcastReceiver() {
@@ -41,6 +42,7 @@ public final class RoutingProbeActivity extends Activity {
     };
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        phoneName=AdapterNames.get(this);
         LinearLayout panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);
         TextView explanation=new TextView(this);
         explanation.setText("Routing experiment — not feature parity. Starting temporarily renames Bluetooth and publishes two real GATT servers/advertisers. Use a separate controller to scan both names and write; compare server/characteristic logs. No HCI-to-advertiser assignment is guessed.");
@@ -71,7 +73,6 @@ public final class RoutingProbeActivity extends Activity {
             advertiser=adapter.getBluetoothLeAdvertiser();
             if(advertiser==null)throw new IllegalStateException("No advertiser");
             record("Capabilities: multiple="+adapter.isMultipleAdvertisementSupported()+", extended="+adapter.isLeExtendedAdvertisingSupported()+", maxData="+adapter.getLeMaximumAdvertisingDataLength());
-            oldName=adapter.getName();
             java.io.ByteArrayOutputStream buffer=new java.io.ByteArrayOutputStream();
             try(java.io.InputStream input=getAssets().open("generated/catalog.json")) {
                 byte[] chunk=new byte[8192];int count;
@@ -145,6 +146,9 @@ public final class RoutingProbeActivity extends Activity {
     }
     private void rename(int slot) throws JSONException {
         pendingSlot=slot;pendingName=profiles[slot].getString("name");
+        String problem=phoneName.lend(this,pendingName);
+        if(problem!=null) {record(problem);stop();return;}
+        lent=true;
         if(pendingName.equals(adapter.getName())) {pendingName=null;advertise(slot);return;}
         if(!adapter.setName(pendingName)) {record("Rename rejected");stop();return;}
         final int generation=epoch;
@@ -180,9 +184,9 @@ public final class RoutingProbeActivity extends Activity {
                 if(servers[i]!=null){for(BluetoothDevice peer:peers)servers[i].cancelConnection(peer);servers[i].close();}
                 servers[i]=null;callbacks[i]=null;profiles[i]=null;nextService[i]=0;ready[i]=false;
             }
-            if(oldName!=null&&adapter!=null&&adapter.isEnabled()&&names.contains(adapter.getName()))adapter.setName(oldName);
         }catch(SecurityException e){record("Permission revoked during cleanup");}
-        oldName=null;peers.clear();
+        if(lent){lent=false;phoneName.giveBack(this);}  // the phone's own name goes back
+        peers.clear();
         if(registered){unregisterReceiver(receiver);registered=false;}
     }
     @Override public void onStop(){stop();super.onStop();}

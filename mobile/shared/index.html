@@ -3,6 +3,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' file:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data:; connect-src 'none'">
 <title>BoardSimulator</title><link rel="stylesheet" href="style.css"></head><body>
 <header><h1>BoardSimulator</h1><p>Real BLE peripheral · foreground developer tool</p></header>
+<div id="phoneName" hidden><span id="phoneNameText" role="status"></span><button id="resetName" hidden title="Stops the boards and gives the phone its own Bluetooth name back"></button></div>
 <label>Board instances<select id="instances"><option value="1">1</option><option value="2">2 · experimental disjoint GATT</option></select></label>
 <p>Full Linux parity is pending. Two-board mode requires Quantum + one Aurora/MoonBoard; discovery identities and exclusive connection detection need physical validation.</p>
 <main id="panels"><section class="board-panel">
