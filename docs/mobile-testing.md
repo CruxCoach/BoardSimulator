@@ -174,7 +174,8 @@ the name change, then:
 |---|---|
 | Stop, or app to background | Name back within about 3 s, reset button gone |
 | Swipe the app away from recents | Name back (the app stops in the background first) |
-| `adb shell am crash org.cruxcoach.boardsimulator` | Name back at once (crash handler) |
+| `adb shell am crash org.cruxcoach.boardsimulator` (hits the WebView renderer process) | Boards stop, name back, the page restarts with a notice in the first panel |
+| `adb shell am crash $(adb shell pidof org.cruxcoach.boardsimulator)` (the app process) | Name back at once (crash handler); the next start closes the record |
 | Kill the process (`adb shell run-as org.cruxcoach.boardsimulator kill -9 <pid>`) | Name back at the next Bluetooth link change (e.g. the controller disconnects) or app start |
 | Reboot without opening the app | Name back after unlock (boot receiver) |
 | `adb install -r` of the same APK without opening it | Name back (update receiver) |

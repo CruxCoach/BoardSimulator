@@ -8,16 +8,24 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.view.WindowManager;
+import android.widget.FrameLayout;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Trusted offline WebView UI with native BluetoothGattServer transport. */
 public final class MainActivity extends Activity {
+    private FrameLayout root;
+    /** The page; null between a dead renderer and its replacement. */
     private WebView web;
+    /** Counts pages; a dead page's bridge goes quiet. */
+    private int page;
+    /** Shown in the first panel once a rebuilt page is ready. */
+    private String rebuiltNotice;
     private final Peripheral[] peripherals=new Peripheral[2];
     private final JSONObject[] profiles=new JSONObject[2];
     private final boolean[] modes=new boolean[2];
@@ -31,6 +39,16 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        for(int slot=0;slot<2;slot++)peripherals[slot]=new Peripheral(this,slot);
+        names=AdapterNames.get(this);
+        names.setListener(this::phoneName);
+        names.restoreIfStale();  // a name an earlier run left behind
+        root=new FrameLayout(this);
+        setContentView(root);
+        createPage();
+    }
+    private void createPage() {
+        final int generation=++page;
         web = new WebView(this);
         web.getSettings().setJavaScriptEnabled(true);
         web.getSettings().setAllowFileAccess(true);
@@ -39,27 +57,42 @@ public final class MainActivity extends Activity {
         web.getSettings().setAllowUniversalAccessFromFileURLs(false);
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) { return true; }
+            /** Unhandled, a dead renderer (crash or killed for memory) ends the whole app natively,
+             * past every give-back of the phone's name. */
+            @Override public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                rendererGone(view, detail!=null&&detail.didCrash());
+                return true;
+            }
         });
-        web.addJavascriptInterface(new Bridge(), "Native");
-        for(int slot=0;slot<2;slot++)peripherals[slot]=new Peripheral(this,slot);
-        names=AdapterNames.get(this);
-        names.setListener(this::phoneName);
-        names.restoreIfStale();  // a name an earlier run left behind
-        setContentView(web);
+        web.addJavascriptInterface(new Bridge(generation), "Native");
+        root.addView(web, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         web.loadUrl("file:///android_asset/index.html");
     }
+    /** The boards' decoders lived in that page: stop the boards, give the name back, start a fresh page. */
+    private void rendererGone(WebView view, boolean crashed) {
+        if(view!=web)return;
+        String what="WebView renderer "+(crashed?"crashed":"was ended by Android");
+        android.util.Log.w("BoardSimUI", what+"; boards stopped, page rebuilt");
+        root.removeView(view);view.destroy();web=null;
+        stopAll();
+        instances=1;for(Peripheral p:peripherals)p.setMultiplexed(false);
+        if(isFinishing()||isDestroyed())return;
+        rebuiltNotice=what+". Boards stopped and the page restarted; press Start.";
+        createPage();
+    }
+    private void js(String script) { if(web!=null)web.evaluateJavascript(script, null); }
     /** Status line with the phone's Bluetooth name and the reset button. */
     private void phoneName(AdapterNameGuard.Status state) {
         try {
             JSONObject line=new JSONObject().put("text",state.text()).put("button",state.button()==null?JSONObject.NULL:state.button());
-            web.evaluateJavascript("window.BLE&&BLE.phoneName&&BLE.phoneName("+line+")", null);
+            js("window.BLE&&BLE.phoneName&&BLE.phoneName("+line+")");
         } catch (Exception ignored) { /* The page shows the line once it can. */ }
     }
     public void status(int slot, String text, boolean running) {
-        web.evaluateJavascript("BLE.status(" + JSONObject.quote(text) + "," + running + ","+slot+")", null);
+        js("BLE.status(" + JSONObject.quote(text) + "," + running + ","+slot+")");
         if(!running){profiles[slot]=null;if(profiles[0]==null&&profiles[1]==null)names.giveBack(this);if(busySlot==slot)ready(slot);}
     }
-    public void disconnected(int slot, String peer) { web.evaluateJavascript("BLE.disconnected("+JSONObject.quote(peer)+","+slot+")", null); }
+    public void disconnected(int slot, String peer) { js("BLE.disconnected("+JSONObject.quote(peer)+","+slot+")"); }
     boolean ownedByOther(int slot, android.bluetooth.BluetoothDevice device) {
         return peripherals[1-slot].owns(device);
     }
@@ -67,6 +100,7 @@ public final class MainActivity extends Activity {
         for(Peripheral peripheral:peripherals)peripheral.refreshAdvertising();
     }
     public void receive(int slot, int token, String peer, byte[] data, boolean withResponse, long atMs, java.util.function.Consumer<JSONArray> completion) {
+        if (web == null) return;  // stopped with its page; nothing waits for this write any more
         JSONArray bytes = new JSONArray(); for (byte b : data) bytes.put(b & 255);
         String type = withResponse ? "'request'" : "'command'";
         web.evaluateJavascript("BLE.receive(" + bytes + ","+JSONObject.quote(peer)+","+token+","+slot+","+type+","+atMs+")", value -> {
@@ -75,6 +109,7 @@ public final class MainActivity extends Activity {
         });
     }
     public void readState(int slot, java.util.function.Consumer<byte[]> completion) {
+        if (web == null) return;
         web.evaluateJavascript("BLE.readState("+slot+")", value -> {
             try { completion.accept(Peripheral.bytes(new JSONArray(value))); }
             catch (Exception e) { peripherals[slot].stop();status(slot,"State read failure: " + e.getMessage(), false); }
@@ -146,10 +181,13 @@ public final class MainActivity extends Activity {
         else status(pendingSlot,"Nearby devices permission denied. Grant it in Settings, then Start.", false);
     }
     private final class Bridge {
+        private final int generation;
+        Bridge(int generation) { this.generation=generation; }
         /** Mirrors the page log into logcat (tag BoardSimUI): `adb logcat -s BoardSimUI BoardSimWire`. */
         @JavascriptInterface public void log(String line) { android.util.Log.i("BoardSimUI", line); }
         @JavascriptInterface public void postMessage(String raw) {
             runOnUiThread(() -> {
+                if(generation!=page)return;  // a dead page
                 int slot=0;
                 try {
                     JSONObject message = new JSONObject(raw);
@@ -162,7 +200,13 @@ public final class MainActivity extends Activity {
                         case "stop": {final int target=slot;starts.removeIf(r->r.optInt("slot")==target);peripherals[slot].stop();status(slot,"Stopped",false);break;}
                         case "resetName": resetName(); break;
                         case "copy": ((ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("BoardSimulator", message.getString("text"))); break;
-                        case "ready": web.evaluateJavascript("BLE.canProbe()",null); status(slot,"Android " + Build.VERSION.RELEASE + " · Start to check advertiser support", false); break;
+                        case "ready": {
+                            js("BLE.canProbe()");
+                            String text=slot==0&&rebuiltNotice!=null?rebuiltNotice:"Android " + Build.VERSION.RELEASE + " · Start to check advertiser support";
+                            if(slot==0)rebuiltNotice=null;
+                            status(slot,text,false);
+                            break;
+                        }
                         default: throw new IllegalArgumentException("Unknown bridge command");
                     }
                 } catch (Exception e) { slot=Math.max(0,Math.min(slot,1));peripherals[slot].stop(); status(slot,"Error: " + e.getMessage(), false); }
@@ -174,5 +218,9 @@ public final class MainActivity extends Activity {
         foreground = false; pending = null;
         stopAll();for(int slot=0;slot<instances;slot++)status(slot,"Stopped in background. Press Start to resume.",false);super.onStop();
     }
-    @Override protected void onDestroy() { stopAll(); names.setListener(null); web.removeJavascriptInterface("Native"); web.destroy(); super.onDestroy(); }
+    @Override protected void onDestroy() {
+        stopAll(); names.setListener(null);
+        if(web!=null){web.removeJavascriptInterface("Native");web.destroy();web=null;}
+        super.onDestroy();
+    }
 }

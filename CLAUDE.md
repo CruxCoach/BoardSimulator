@@ -200,7 +200,9 @@ JVM-tested) is the only place that decides about it: commit the own name before
 the first rename, never record a board name (`generated/adapter_names.txt` from
 `tools/export_mobile.py`, plus CruxCoach sharing names), give it back on stop,
 app start, crash and via `NameRecoveryReceiver` (enabled only while a record is
-open). `Peripheral` renames but never restores by itself.
+open). `Peripheral` renames but never restores by itself. A dead WebView
+renderer (`onRenderProcessGone`) stops the boards and rebuilds the page;
+unhandled it would end the app natively and skip every give-back.
 
 ### Decoder details
 

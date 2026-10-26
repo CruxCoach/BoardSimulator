@@ -61,7 +61,11 @@ goes back once every board stopped, on the next app start, from a crash handler,
 and through `NameRecoveryReceiver` (boot, app update, ACL connect/disconnect),
 which is enabled only while a record is open. The record closes only once the
 own name is read back; a name the user set in Android's settings meanwhile wins.
-*Force stop* stops all delivery until the app is opened again. See
+*Force stop* stops all delivery until the app is opened again. The page runs in
+WebView's renderer process; when that dies (crash, or ended by Android),
+`MainActivity` handles `onRenderProcessGone`: it stops the boards (their
+decoders lived in the page), gives the name back and builds a fresh page,
+instead of letting WebView end the app natively, past the crash handler. See
 [advertising APIs](https://developer.android.com/reference/android/bluetooth/le/BluetoothLeAdvertiser).
 
 Single-board Exclusive stops the existing advertising set on the connection
